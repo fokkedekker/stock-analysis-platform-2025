@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from "react"
 import Link from "next/link"
 import { Pagination } from "@/components/Pagination"
+import { useQuarter } from "@/contexts/QuarterContext"
 import { getPegStocks, PegStock, formatNumber, formatPercent } from "@/lib/api"
 import { RiCheckLine, RiCloseLine } from "@remixicon/react"
 import { ScreenerInfo, SCREENER_INFO } from "@/components/ScreenerInfo"
@@ -20,6 +21,7 @@ function PassBadge({ pass }: { pass: boolean | null }) {
 }
 
 export default function PegPage() {
+  const { quarter } = useQuarter()
   const [stocks, setStocks] = useState<PegStock[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -43,7 +45,7 @@ export default function PegPage() {
     async function fetchData() {
       try {
         setLoading(true)
-        const data = await getPegStocks(maxPeg, minGrowth, 200)
+        const data = await getPegStocks(maxPeg, minGrowth, 200, quarter)
         setStocks(data.stocks)
         setError(null)
       } catch (err) {
@@ -54,7 +56,7 @@ export default function PegPage() {
       }
     }
     fetchData()
-  }, [maxPeg, minGrowth])
+  }, [maxPeg, minGrowth, quarter])
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">

@@ -39,9 +39,22 @@ async def main():
         ticker_count = conn.execute(
             "SELECT COUNT(*) FROM tickers WHERE is_active = TRUE"
         ).fetchone()[0]
-        latest_quarter = conn.execute(
-            "SELECT MAX(fiscal_quarter) FROM company_profiles"
-        ).fetchone()[0]
+        latest_quarter_row = conn.execute(
+            """
+            SELECT DISTINCT
+                CAST(EXTRACT(YEAR FROM fiscal_date) AS INTEGER) || 'Q' || CASE
+                    WHEN EXTRACT(MONTH FROM fiscal_date) <= 3 THEN '1'
+                    WHEN EXTRACT(MONTH FROM fiscal_date) <= 6 THEN '2'
+                    WHEN EXTRACT(MONTH FROM fiscal_date) <= 9 THEN '3'
+                    ELSE '4'
+                END as quarter
+            FROM income_statements
+            WHERE period = 'quarter' AND fiscal_date IS NOT NULL
+            ORDER BY quarter DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        latest_quarter = latest_quarter_row[0] if latest_quarter_row else "N/A"
 
     console.print(f"Current tickers: {ticker_count}")
     console.print(f"Latest quarter: {latest_quarter}")
@@ -79,6 +92,10 @@ async def main():
         console.print("[bold green]Quarterly update complete![/bold green]")
         console.print(f"Updated: {stats['completed']}")
         console.print(f"Failed: {stats['failed']}")
+
+        console.print()
+        console.print("[bold yellow]Next step:[/bold yellow] Run analysis to update scores:")
+        console.print("  python scripts/run_analysis.py --parallel-workers 8")
 
 
 if __name__ == "__main__":

@@ -109,6 +109,113 @@ export interface NetNetStock extends Stock {
   deep_value: boolean;
 }
 
+// Pipeline types
+export type QualityLabel = 'compounder' | 'average' | 'weak';
+export type RankMethod = 'magic-formula' | 'earnings-yield' | 'roic' | 'peg' | 'graham-score' | 'net-net-discount';
+export type ValuationLens = 'graham' | 'net-net' | 'peg' | 'magic-formula' | 'fama-french-bm';
+
+export interface PipelineStock extends Stock {
+  // Stage 1: Survival
+  altman_z_score: number | null;
+  altman_zone: string | null;
+  altman_passed: boolean;
+  piotroski_score: number | null;
+  piotroski_passed: boolean;
+
+  // Stage 2: Quality
+  roic: number | null;
+  free_cash_flow: number | null;
+  fcf_positive_5yr: boolean | null;
+  quality_label: QualityLabel;
+
+  // Stage 3: Valuation
+  graham_score: number | null;
+  graham_pe: number | null;
+  graham_pb: number | null;
+  graham_passed: boolean;
+  trading_below_ncav: boolean | null;
+  net_net_discount: number | null;
+  net_net_passed: boolean;
+  peg_ratio: number | null;
+  eps_cagr: number | null;
+  peg_passed: boolean;
+  magic_formula_rank: number | null;
+  earnings_yield: number | null;
+  mf_roic: number | null;
+  magic_formula_passed: boolean;
+  book_to_market_percentile: number | null;
+  ff_bm_passed: boolean;
+  lenses_passed: number;
+  lenses_active: number;
+  valuation_lenses_passed: ValuationLens[];
+
+  // Stage 4: Factor Exposure
+  profitability_percentile: number | null;
+  asset_growth_percentile: number | null;
+  book_to_market: number | null;
+  profitability: number | null;
+  asset_growth: number | null;
+}
+
+export interface PipelineConfig {
+  survival: {
+    require_altman: boolean;
+    altman_zone: string;
+    require_piotroski: boolean;
+    piotroski_min: number;
+  };
+  quality: {
+    filter_enabled: boolean;
+    min_quality: string;
+  };
+  valuation: {
+    min_lenses: number;
+    strict_mode: boolean;
+    lenses: {
+      graham: { enabled: boolean; mode: string; min_score: number };
+      net_net: { enabled: boolean };
+      peg: { enabled: boolean; max_peg: number };
+      magic_formula: { enabled: boolean; top_pct: number };
+      fama_french_bm: { enabled: boolean; top_pct: number };
+    };
+  };
+  rank_by: RankMethod;
+}
+
+export interface PipelineResponse {
+  screen: 'pipeline';
+  config: PipelineConfig;
+  count: number;
+  stocks: PipelineStock[];
+}
+
+export interface PipelineParams {
+  // Stage 1
+  require_altman?: boolean;
+  altman_zone?: 'safe' | 'grey';
+  require_piotroski?: boolean;
+  piotroski_min?: number;
+  // Stage 2
+  quality_filter?: boolean;
+  min_quality?: QualityLabel;
+  // Stage 3
+  min_valuation_lenses?: number;
+  strict_mode?: boolean;
+  lens_graham?: boolean;
+  lens_net_net?: boolean;
+  lens_peg?: boolean;
+  lens_magic_formula?: boolean;
+  lens_fama_french_bm?: boolean;
+  graham_mode?: 'strict' | 'modern' | 'garp' | 'relaxed';
+  graham_min?: number;
+  max_peg?: number;
+  mf_top_pct?: number;
+  ff_bm_top_pct?: number;
+  // Ranking
+  rank_by?: RankMethod;
+  limit?: number;
+}
+
 export interface ScreenerResponse<T> {
   screen: string;
   count: number;
@@ -137,53 +244,120 @@ export interface StockAnalysis {
   net_net: any;
 }
 
+// Quarters
+export interface QuartersResponse {
+  quarters: string[];
+  latest: string | null;
+}
+
+export async function getQuarters(): Promise<QuartersResponse> {
+  const res = await fetch(`${API_BASE}/screener/quarters`);
+  if (!res.ok) throw new Error('Failed to fetch quarters');
+  return res.json();
+}
+
 // API Functions
 
 // Rankings
-export async function getRankings(minSystems = 1, limit = 100): Promise<ScreenerResponse<RankingStock>> {
-  const res = await fetch(`${API_BASE}/screener/rankings?min_systems=${minSystems}&limit=${limit}`);
+export async function getRankings(minSystems = 1, limit = 100, quarter?: string | null): Promise<ScreenerResponse<RankingStock>> {
+  let url = `${API_BASE}/screener/rankings?min_systems=${minSystems}&limit=${limit}`;
+  if (quarter) url += `&quarter=${quarter}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch rankings');
   return res.json();
 }
 
+// Pipeline
+export async function getPipelineStocks(params: PipelineParams = {}, quarter?: string | null): Promise<PipelineResponse> {
+  const searchParams = new URLSearchParams();
+
+  // Stage 1
+  if (params.require_altman !== undefined) searchParams.set('require_altman', String(params.require_altman));
+  if (params.altman_zone) searchParams.set('altman_zone', params.altman_zone);
+  if (params.require_piotroski !== undefined) searchParams.set('require_piotroski', String(params.require_piotroski));
+  if (params.piotroski_min !== undefined) searchParams.set('piotroski_min', String(params.piotroski_min));
+
+  // Stage 2
+  if (params.quality_filter !== undefined) searchParams.set('quality_filter', String(params.quality_filter));
+  if (params.min_quality) searchParams.set('min_quality', params.min_quality);
+
+  // Stage 3
+  if (params.min_valuation_lenses !== undefined) searchParams.set('min_valuation_lenses', String(params.min_valuation_lenses));
+  if (params.strict_mode !== undefined) searchParams.set('strict_mode', String(params.strict_mode));
+  if (params.lens_graham !== undefined) searchParams.set('lens_graham', String(params.lens_graham));
+  if (params.lens_net_net !== undefined) searchParams.set('lens_net_net', String(params.lens_net_net));
+  if (params.lens_peg !== undefined) searchParams.set('lens_peg', String(params.lens_peg));
+  if (params.lens_magic_formula !== undefined) searchParams.set('lens_magic_formula', String(params.lens_magic_formula));
+  if (params.lens_fama_french_bm !== undefined) searchParams.set('lens_fama_french_bm', String(params.lens_fama_french_bm));
+  if (params.graham_mode) searchParams.set('graham_mode', params.graham_mode);
+  if (params.graham_min !== undefined) searchParams.set('graham_min', String(params.graham_min));
+  if (params.max_peg !== undefined) searchParams.set('max_peg', String(params.max_peg));
+  if (params.mf_top_pct !== undefined) searchParams.set('mf_top_pct', String(params.mf_top_pct));
+  if (params.ff_bm_top_pct !== undefined) searchParams.set('ff_bm_top_pct', String(params.ff_bm_top_pct));
+
+  // Ranking
+  if (params.rank_by) searchParams.set('rank_by', params.rank_by);
+  if (params.limit !== undefined) searchParams.set('limit', String(params.limit));
+
+  // Quarter
+  if (quarter) searchParams.set('quarter', quarter);
+
+  const url = `${API_BASE}/screener/pipeline?${searchParams.toString()}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to fetch pipeline stocks');
+  return res.json();
+}
+
 // Graham
-export async function getGrahamStocks(mode = 'strict', minScore = 0, limit = 100): Promise<ScreenerResponse<GrahamStock>> {
-  const res = await fetch(`${API_BASE}/screener/graham?mode=${mode}&min_score=${minScore}&limit=${limit}`);
+export async function getGrahamStocks(mode = 'strict', minScore = 0, limit = 100, quarter?: string | null): Promise<ScreenerResponse<GrahamStock>> {
+  let url = `${API_BASE}/screener/graham?mode=${mode}&min_score=${minScore}&limit=${limit}`;
+  if (quarter) url += `&quarter=${quarter}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch Graham stocks');
   return res.json();
 }
 
 // Magic Formula
-export async function getMagicFormulaStocks(top = 100): Promise<ScreenerResponse<MagicFormulaStock>> {
-  const res = await fetch(`${API_BASE}/screener/magic-formula?top=${top}`);
+export async function getMagicFormulaStocks(top = 100, quarter?: string | null): Promise<ScreenerResponse<MagicFormulaStock>> {
+  let url = `${API_BASE}/screener/magic-formula?top=${top}`;
+  if (quarter) url += `&quarter=${quarter}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch Magic Formula stocks');
   return res.json();
 }
 
 // Piotroski
-export async function getPiotroskiStocks(minScore = 0, limit = 100): Promise<ScreenerResponse<PiotroskiStock>> {
-  const res = await fetch(`${API_BASE}/screener/piotroski?min_score=${minScore}&limit=${limit}`);
+export async function getPiotroskiStocks(minScore = 0, limit = 100, quarter?: string | null): Promise<ScreenerResponse<PiotroskiStock>> {
+  let url = `${API_BASE}/screener/piotroski?min_score=${minScore}&limit=${limit}`;
+  if (quarter) url += `&quarter=${quarter}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch Piotroski stocks');
   return res.json();
 }
 
 // Altman
-export async function getAltmanStocks(zone = 'safe', limit = 100): Promise<ScreenerResponse<AltmanStock>> {
-  const res = await fetch(`${API_BASE}/screener/altman?zone=${zone}&limit=${limit}`);
+export async function getAltmanStocks(zone = 'safe', limit = 100, quarter?: string | null): Promise<ScreenerResponse<AltmanStock>> {
+  let url = `${API_BASE}/screener/altman?zone=${zone}&limit=${limit}`;
+  if (quarter) url += `&quarter=${quarter}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch Altman stocks');
   return res.json();
 }
 
 // ROIC
-export async function getRoicStocks(minRoic = 0, requireFcf = false, limit = 100): Promise<ScreenerResponse<RoicStock>> {
-  const res = await fetch(`${API_BASE}/screener/roic?min_roic=${minRoic}&require_fcf=${requireFcf}&limit=${limit}`);
+export async function getRoicStocks(minRoic = 0, requireFcf = false, limit = 100, quarter?: string | null): Promise<ScreenerResponse<RoicStock>> {
+  let url = `${API_BASE}/screener/roic?min_roic=${minRoic}&require_fcf=${requireFcf}&limit=${limit}`;
+  if (quarter) url += `&quarter=${quarter}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch ROIC stocks');
   return res.json();
 }
 
 // PEG
-export async function getPegStocks(maxPeg = 10, minGrowth = 0, limit = 100): Promise<ScreenerResponse<PegStock>> {
-  const res = await fetch(`${API_BASE}/screener/peg?max_peg=${maxPeg}&min_growth=${minGrowth}&limit=${limit}`);
+export async function getPegStocks(maxPeg = 10, minGrowth = 0, limit = 100, quarter?: string | null): Promise<ScreenerResponse<PegStock>> {
+  let url = `${API_BASE}/screener/peg?max_peg=${maxPeg}&min_growth=${minGrowth}&limit=${limit}`;
+  if (quarter) url += `&quarter=${quarter}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch PEG stocks');
   return res.json();
 }
@@ -193,18 +367,21 @@ export async function getFamaFrenchStocks(
   minProfitability = 0,
   minBookToMarket = 0,
   maxAssetGrowth = 1,
-  limit = 200
+  limit = 200,
+  quarter?: string | null
 ): Promise<ScreenerResponse<FamaFrenchStock>> {
-  const res = await fetch(
-    `${API_BASE}/screener/fama-french?min_profitability=${minProfitability}&min_book_to_market=${minBookToMarket}&max_asset_growth=${maxAssetGrowth}&limit=${limit}`
-  );
+  let url = `${API_BASE}/screener/fama-french?min_profitability=${minProfitability}&min_book_to_market=${minBookToMarket}&max_asset_growth=${maxAssetGrowth}&limit=${limit}`;
+  if (quarter) url += `&quarter=${quarter}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch Fama-French stocks');
   return res.json();
 }
 
 // Net-Net
-export async function getNetNetStocks(maxDiscount = 1, limit = 100): Promise<ScreenerResponse<NetNetStock>> {
-  const res = await fetch(`${API_BASE}/screener/net-net?max_discount=${maxDiscount}&limit=${limit}`);
+export async function getNetNetStocks(maxDiscount = 1, limit = 100, quarter?: string | null): Promise<ScreenerResponse<NetNetStock>> {
+  let url = `${API_BASE}/screener/net-net?max_discount=${maxDiscount}&limit=${limit}`;
+  if (quarter) url += `&quarter=${quarter}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('Failed to fetch Net-Net stocks');
   return res.json();
 }
@@ -263,4 +440,70 @@ export function formatCurrency(value: number | null | undefined): string {
 export function formatPercent(value: number | null | undefined): string {
   if (value === null || value === undefined) return 'N/A';
   return `${(value * 100).toFixed(2)}%`;
+}
+
+// AI Explain
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export async function explainStock(
+  symbol: string,
+  messages: ChatMessage[]
+): Promise<Response> {
+  // Returns raw Response for streaming
+  return fetch(`${API_BASE}/explain/${symbol}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+  });
+}
+
+// Backtest types
+export interface BacktestRequest {
+  symbols: string[];
+  buy_quarter: string;
+  benchmark_return?: number;
+}
+
+export interface QuarterlyReturn {
+  quarter: string;
+  return_pct: number;
+}
+
+export interface StockReturn {
+  symbol: string;
+  name: string;
+  buy_price: number;
+  current_price: number;
+  total_return: number;
+  quarterly_returns: QuarterlyReturn[];
+}
+
+export interface BacktestResult {
+  buy_quarter: string;
+  latest_quarter: string;
+  quarters_held: number;
+  stocks: StockReturn[];
+  winners: StockReturn[];
+  losers: StockReturn[];
+  portfolio_return: number;
+  benchmark_return: number;
+  alpha: number;
+  quarterly_portfolio_returns: QuarterlyReturn[];
+  quarterly_benchmark_returns: QuarterlyReturn[];
+}
+
+export async function simulateBuy(request: BacktestRequest): Promise<BacktestResult> {
+  const response = await fetch(`${API_BASE}/backtest/simulate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || 'Backtest simulation failed');
+  }
+  return response.json();
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from "react"
 import Link from "next/link"
 import { Pagination } from "@/components/Pagination"
+import { useQuarter } from "@/contexts/QuarterContext"
 import { getNetNetStocks, NetNetStock, formatCurrency, formatPercent } from "@/lib/api"
 import { RiCheckLine, RiCloseLine } from "@remixicon/react"
 import { ScreenerInfo, SCREENER_INFO } from "@/components/ScreenerInfo"
@@ -20,6 +21,7 @@ function PassBadge({ pass }: { pass: boolean | null }) {
 }
 
 export default function NetNetPage() {
+  const { quarter } = useQuarter()
   const [stocks, setStocks] = useState<NetNetStock[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -42,7 +44,7 @@ export default function NetNetPage() {
     async function fetchData() {
       try {
         setLoading(true)
-        const data = await getNetNetStocks(maxDiscount, 200)
+        const data = await getNetNetStocks(maxDiscount, 200, quarter)
         setStocks(data.stocks)
         setError(null)
       } catch (err) {
@@ -53,7 +55,7 @@ export default function NetNetPage() {
       }
     }
     fetchData()
-  }, [maxDiscount])
+  }, [maxDiscount, quarter])
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">

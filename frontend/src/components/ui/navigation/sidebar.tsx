@@ -1,9 +1,10 @@
 "use client"
 import { siteConfig } from "@/app/siteConfig"
+import { QuarterSelector } from "@/components/QuarterSelector"
 import { cx, focusRing } from "@/lib/utils"
 import {
   RiBarChartBoxLine,
-  RiHome2Line,
+  RiFilter3Line,
   RiLineChartLine,
   RiMoonLine,
   RiPercentLine,
@@ -21,17 +22,24 @@ import { useEffect, useState } from "react"
 import MobileSidebar from "./MobileSidebar"
 
 const navigation = [
-  { name: "Rankings", href: siteConfig.baseLinks.home, icon: RiHome2Line },
+  { name: "Pipeline", href: siteConfig.baseLinks.home, icon: RiFilter3Line },
 ] as const
 
-const screeners = [
+// Grouped by pipeline stage
+const survivalGates = [
+  { name: "Altman Z-Score", href: siteConfig.baseLinks.altman, icon: RiShieldCheckLine },
+  { name: "Piotroski", href: siteConfig.baseLinks.piotroski, icon: RiBarChartBoxLine },
+] as const
+
+const qualityScreens = [
+  { name: "ROIC", href: siteConfig.baseLinks.roic, icon: RiPercentLine },
+  { name: "Fama-French", href: siteConfig.baseLinks.famaFrench, icon: RiStackLine },
+] as const
+
+const valuationLenses = [
   { name: "Graham", href: siteConfig.baseLinks.graham, icon: RiScales3Line },
   { name: "Magic Formula", href: siteConfig.baseLinks.magicFormula, icon: RiSparklingLine },
-  { name: "Piotroski", href: siteConfig.baseLinks.piotroski, icon: RiBarChartBoxLine },
-  { name: "Altman Z-Score", href: siteConfig.baseLinks.altman, icon: RiShieldCheckLine },
-  { name: "ROIC", href: siteConfig.baseLinks.roic, icon: RiPercentLine },
   { name: "PEG", href: siteConfig.baseLinks.peg, icon: RiLineChartLine },
-  { name: "Fama-French", href: siteConfig.baseLinks.famaFrench, icon: RiStackLine },
   { name: "Net-Net", href: siteConfig.baseLinks.netNet, icon: RiStockLine },
 ] as const
 
@@ -76,6 +84,43 @@ function ThemeToggle() {
   )
 }
 
+function NavSection({
+  title,
+  items,
+  isActive,
+}: {
+  title: string
+  items: readonly { name: string; href: string; icon: React.ComponentType<{ className?: string }> }[]
+  isActive: (href: string) => boolean
+}) {
+  return (
+    <div>
+      <span className="text-xs font-medium leading-6 text-gray-500">
+        {title}
+      </span>
+      <ul aria-label={title} role="list" className="space-y-0.5">
+        {items.map((item) => (
+          <li key={item.name}>
+            <Link
+              href={item.href}
+              className={cx(
+                isActive(item.href)
+                  ? "text-indigo-600 dark:text-indigo-400"
+                  : "text-gray-700 hover:text-gray-900 dark:text-gray-400 hover:dark:text-gray-50",
+                "flex items-center gap-x-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition hover:bg-gray-100 hover:dark:bg-gray-900",
+                focusRing,
+              )}
+            >
+              <item.icon className="size-4 shrink-0" aria-hidden="true" />
+              {item.name}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export function Sidebar() {
   const pathname = usePathname()
   const isActive = (itemHref: string) => {
@@ -95,10 +140,12 @@ export function Sidebar() {
               Stock Analysis
             </span>
           </div>
+          <QuarterSelector />
           <nav
             aria-label="core navigation links"
-            className="flex flex-1 flex-col space-y-10"
+            className="flex flex-1 flex-col space-y-6"
           >
+            {/* Main navigation */}
             <ul role="list" className="space-y-0.5">
               {navigation.map((item) => (
                 <li key={item.name}>
@@ -106,7 +153,7 @@ export function Sidebar() {
                     href={item.href}
                     className={cx(
                       isActive(item.href)
-                        ? "text-indigo-600 dark:text-indigo-400"
+                        ? "text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950"
                         : "text-gray-700 hover:text-gray-900 dark:text-gray-400 hover:dark:text-gray-50",
                       "flex items-center gap-x-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition hover:bg-gray-100 hover:dark:bg-gray-900",
                       focusRing,
@@ -118,33 +165,11 @@ export function Sidebar() {
                 </li>
               ))}
             </ul>
-            <div>
-              <span className="text-xs font-medium leading-6 text-gray-500">
-                Screeners
-              </span>
-              <ul aria-label="screeners" role="list" className="space-y-0.5">
-                {screeners.map((item) => (
-                  <li key={item.name}>
-                    <Link
-                      href={item.href}
-                      className={cx(
-                        isActive(item.href)
-                          ? "text-indigo-600 dark:text-indigo-400"
-                          : "text-gray-700 hover:text-gray-900 dark:text-gray-400 hover:dark:text-gray-50",
-                        "flex items-center gap-x-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition hover:bg-gray-100 hover:dark:bg-gray-900",
-                        focusRing,
-                      )}
-                    >
-                      <item.icon
-                        className="size-4 shrink-0"
-                        aria-hidden="true"
-                      />
-                      {item.name}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </div>
+
+            {/* Grouped screeners */}
+            <NavSection title="Survival Gates" items={survivalGates} isActive={isActive} />
+            <NavSection title="Quality Screens" items={qualityScreens} isActive={isActive} />
+            <NavSection title="Valuation Lenses" items={valuationLenses} isActive={isActive} />
           </nav>
           <div className="mt-auto space-y-3">
             <ThemeToggle />

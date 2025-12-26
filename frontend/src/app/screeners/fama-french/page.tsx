@@ -4,12 +4,14 @@ import { useEffect, useState, useMemo } from "react"
 import Link from "next/link"
 import { Badge } from "@/components/Badge"
 import { Pagination } from "@/components/Pagination"
+import { useQuarter } from "@/contexts/QuarterContext"
 import { ScreenerInfo, SCREENER_INFO } from "@/components/ScreenerInfo"
 import { getFamaFrenchStocks, FamaFrenchStock, formatPercent } from "@/lib/api"
 
 const ITEMS_PER_PAGE = 50
 
 export default function FamaFrenchPage() {
+  const { quarter } = useQuarter()
   const [stocks, setStocks] = useState<FamaFrenchStock[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -34,7 +36,7 @@ export default function FamaFrenchPage() {
     async function fetchData() {
       try {
         setLoading(true)
-        const data = await getFamaFrenchStocks(minProfitability, minBookToMarket, maxAssetGrowth, 500)
+        const data = await getFamaFrenchStocks(minProfitability, minBookToMarket, maxAssetGrowth, 500, quarter)
         setStocks(data.stocks)
         setError(null)
       } catch (err) {
@@ -45,7 +47,7 @@ export default function FamaFrenchPage() {
       }
     }
     fetchData()
-  }, [minProfitability, minBookToMarket, maxAssetGrowth])
+  }, [minProfitability, minBookToMarket, maxAssetGrowth, quarter])
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">

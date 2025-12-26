@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from "react"
 import Link from "next/link"
 import { Badge } from "@/components/Badge"
 import { Pagination } from "@/components/Pagination"
+import { useQuarter } from "@/contexts/QuarterContext"
 import { getGrahamStocks, GrahamStock, formatNumber } from "@/lib/api"
 import { RiCheckLine, RiCloseLine } from "@remixicon/react"
 import { ScreenerInfo, SCREENER_INFO } from "@/components/ScreenerInfo"
@@ -60,6 +61,7 @@ function CriteriaBadge({ pass }: { pass: boolean | null }) {
 }
 
 export default function GrahamPage() {
+  const { quarter } = useQuarter()
   const [allStocks, setAllStocks] = useState<GrahamStock[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -80,7 +82,7 @@ export default function GrahamPage() {
       try {
         setLoading(true)
         // Fetch all stocks (min_score=0 to get everything)
-        const data = await getGrahamStocks(mode, 0, 500)
+        const data = await getGrahamStocks(mode, 0, 500, quarter)
         setAllStocks(data.stocks)
         setError(null)
       } catch (err) {
@@ -91,7 +93,7 @@ export default function GrahamPage() {
       }
     }
     fetchData()
-  }, [mode])
+  }, [mode, quarter])
 
   // Filter stocks based on selected criteria
   const filteredStocks = useMemo(() => {
@@ -128,8 +130,6 @@ export default function GrahamPage() {
       return next
     })
   }
-
-  const clearFilters = () => setSelectedCriteria(new Set())
 
   const allCriteriaKeys = CRITERIA.map(c => c.key)
   const allSelected = selectedCriteria.size === CRITERIA.length

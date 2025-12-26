@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from "react"
 import Link from "next/link"
 import { Badge } from "@/components/Badge"
 import { Pagination } from "@/components/Pagination"
+import { useQuarter } from "@/contexts/QuarterContext"
 import { getPiotroskiStocks, PiotroskiStock } from "@/lib/api"
 import { RiCheckLine, RiCloseLine } from "@remixicon/react"
 import { ScreenerInfo, SCREENER_INFO } from "@/components/ScreenerInfo"
@@ -35,6 +36,7 @@ function SignalBadge({ pass }: { pass: boolean | null }) {
 }
 
 export default function PiotroskiPage() {
+  const { quarter } = useQuarter()
   const [allStocks, setAllStocks] = useState<PiotroskiStock[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -46,7 +48,7 @@ export default function PiotroskiPage() {
       try {
         setLoading(true)
         // Fetch all stocks (min_score=0 to get everything)
-        const data = await getPiotroskiStocks(0, 500)
+        const data = await getPiotroskiStocks(0, 500, quarter)
         setAllStocks(data.stocks)
         setError(null)
       } catch (err) {
@@ -57,7 +59,7 @@ export default function PiotroskiPage() {
       }
     }
     fetchData()
-  }, [])
+  }, [quarter])
 
   // Filter stocks based on selected signals
   const filteredStocks = useMemo(() => {
@@ -94,8 +96,6 @@ export default function PiotroskiPage() {
       return next
     })
   }
-
-  const clearFilters = () => setSelectedSignals(new Set())
 
   const selectCategory = (category: string) => {
     const categorySignals = SIGNALS.filter(s => s.category === category).map(s => s.key)

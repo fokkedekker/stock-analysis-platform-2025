@@ -10,6 +10,7 @@ const inter = Inter({
 })
 
 import { Sidebar } from "@/components/ui/navigation/sidebar"
+import { QuarterProvider } from "@/contexts/QuarterContext"
 import { siteConfig } from "./siteConfig"
 
 export const metadata: Metadata = {
@@ -35,8 +36,10 @@ export default function RootLayout({
       >
         <div className="mx-auto max-w-screen-2xl">
           <ThemeProvider defaultTheme="system" attribute="class">
-            <Sidebar />
-            <main className="lg:pl-72">{children}</main>
+            <QuarterProvider>
+              <Sidebar />
+              <main className="lg:pl-72">{children}</main>
+            </QuarterProvider>
           </ThemeProvider>
         </div>
       </body>

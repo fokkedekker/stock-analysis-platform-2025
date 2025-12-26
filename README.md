@@ -86,6 +86,40 @@ API will be available at http://localhost:8000
 ### Status
 - `GET /api/v1/status` - API status and data freshness
 
+## Historical Data & Multi-Quarter Analysis
+
+The system supports analyzing the last 8 quarters of data for historical comparisons.
+
+### Load Historical Prices
+
+```bash
+# Fetch historical prices for last 8 quarters (~7 min for 5K stocks)
+python scripts/historical_load.py
+
+# Skip confirmation prompt
+python scripts/historical_load.py -y
+```
+
+This fetches quarter-end prices and calculates P/E, P/B, and market cap for each quarter.
+
+### Run Analysis for Historical Quarters
+
+```bash
+# Run analysis for all quarters with data
+python scripts/run_analysis.py --all-quarters
+
+# Run analysis for a specific quarter
+python scripts/run_analysis.py --quarter 2024Q3
+
+# Run only specific analyzers
+python scripts/run_analysis.py --all-quarters --only graham piotroski
+
+# List available analyzers
+python scripts/run_analysis.py --list
+```
+
+Available analyzers: `graham-strict`, `graham-modern`, `magic-formula`, `piotroski`, `altman`, `roic`, `garp`, `fama-french`, `net-net`
+
 ## Quarterly Update
 
 Run quarterly to refresh data:

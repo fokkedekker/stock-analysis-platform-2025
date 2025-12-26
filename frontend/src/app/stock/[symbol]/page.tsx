@@ -16,14 +16,22 @@ import {
   StockAnalysis,
   StockProfile,
 } from "@/lib/api"
-import { RiArrowLeftLine, RiCheckLine, RiCloseLine } from "@remixicon/react"
+import {
+  RiArrowLeftLine,
+  RiCheckLine,
+  RiCloseLine,
+  RiShieldCheckLine,
+  RiSparklingLine,
+} from "@remixicon/react"
+import { StockExplainChat } from "@/components/StockExplainChat"
+import { Button } from "@/components/Button"
 
 function PassBadge({ pass, label }: { pass: boolean | null | undefined; label?: string }) {
   if (pass === true) {
     return (
       <div className="flex items-center gap-1 text-green-600">
         <RiCheckLine className="w-4 h-4" />
-        {label && <span className="text-xs">{label}</span>}
+        {label && <span className="text-sm font-medium">{label}</span>}
       </div>
     )
   }
@@ -31,40 +39,46 @@ function PassBadge({ pass, label }: { pass: boolean | null | undefined; label?: 
     return (
       <div className="flex items-center gap-1 text-red-500">
         <RiCloseLine className="w-4 h-4" />
-        {label && <span className="text-xs">{label}</span>}
+        {label && <span className="text-sm font-medium">{label}</span>}
       </div>
     )
   }
-  return <span className="text-gray-400">N/A</span>
+  return <span className="text-gray-400 text-sm">N/A</span>
 }
 
-function AnalysisCard({
+function StageCard({
   title,
-  pass,
-  score,
-  details,
+  icon,
+  children,
+  status,
 }: {
   title: string
-  pass: boolean | null
-  score?: string
-  details?: string[]
+  icon?: React.ReactNode
+  children: React.ReactNode
+  status?: "pass" | "fail" | "neutral"
 }) {
+  const borderColor =
+    status === "pass"
+      ? "border-green-200 dark:border-green-900"
+      : status === "fail"
+      ? "border-red-200 dark:border-red-900"
+      : "border-gray-200 dark:border-gray-800"
+  const bgColor =
+    status === "pass"
+      ? "bg-green-50 dark:bg-green-950/30"
+      : status === "fail"
+      ? "bg-red-50 dark:bg-red-950/30"
+      : "bg-white dark:bg-gray-950"
+
   return (
-    <div className={`p-4 rounded-lg border ${pass ? 'border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950' : pass === false ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950' : 'border-gray-200 dark:border-gray-800'}`}>
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">{title}</h3>
-        <PassBadge pass={pass} />
+    <div className={`p-4 rounded-lg border-2 ${borderColor} ${bgColor}`}>
+      <div className="flex items-center gap-2 mb-3">
+        {icon}
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wide">
+          {title}
+        </h3>
       </div>
-      {score && (
-        <div className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-1">{score}</div>
-      )}
-      {details && details.length > 0 && (
-        <ul className="text-xs text-gray-500 space-y-0.5">
-          {details.map((d, i) => (
-            <li key={i}>{d}</li>
-          ))}
-        </ul>
-      )}
+      {children}
     </div>
   )
 }
@@ -81,7 +95,8 @@ export default function StockDetailPage() {
   const [dividends, setDividends] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'income' | 'balance' | 'cashflow' | 'dividends'>('income')
+  const [activeTab, setActiveTab] = useState<"income" | "balance" | "cashflow" | "dividends">("income")
+  const [showExplain, setShowExplain] = useState(false)
 
   useEffect(() => {
     async function fetchData() {
@@ -90,9 +105,9 @@ export default function StockDetailPage() {
         const [analysisData, profileData, incomeData, balanceData, cashData, divData] = await Promise.all([
           getStockAnalysis(symbol).catch(() => null),
           getStockProfile(symbol).catch(() => null),
-          getIncomeStatements(symbol, 'annual', 5).catch(() => []),
-          getBalanceSheets(symbol, 'annual', 5).catch(() => []),
-          getCashFlows(symbol, 'annual', 5).catch(() => []),
+          getIncomeStatements(symbol, "annual", 5).catch(() => []),
+          getBalanceSheets(symbol, "annual", 5).catch(() => []),
+          getCashFlows(symbol, "annual", 5).catch(() => []),
           getDividends(symbol, 20).catch(() => []),
         ])
         setAnalysis(analysisData)
@@ -139,16 +154,39 @@ export default function StockDetailPage() {
   const famaFrench = analysis?.fama_french
   const netNet = analysis?.net_net
 
+  // Determine survival status
+  const altmanPass = altman?.zone === "safe"
+  const piotroskiPass = piotroski?.f_score >= 5
+  const survivalPass = altmanPass && piotroskiPass
+
+  // Determine quality label
+  const roicValue = roic?.roic
+  const qualityLabel =
+    roicValue && roicValue >= 0.15 && roic?.fcf_positive_5yr
+      ? "Compounder"
+      : roicValue && roicValue >= 0.08
+      ? "Average"
+      : "Weak"
+
+  // Count valuation lenses passed
+  const grahamPass = graham?.criteria_passed >= 5
+  const pegPass = peg?.peg_pass
+  const mfPass = magicFormula?.combined_rank <= Math.max(100, (magicFormula?.combined_rank || 0) * 0.2)
+  const netNetPass = netNet?.trading_below_ncav
+  const ffBmPass = famaFrench?.book_to_market_percentile >= 0.7
+
+  const lensesPassed = [grahamPass, pegPass, mfPass, netNetPass, ffBmPass].filter(Boolean)
+
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       {/* Header */}
-      <div className="mb-8">
+      <div className="mb-6">
         <Link
           href="/"
           className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-4"
         >
           <RiArrowLeftLine className="w-4 h-4" />
-          Back to Rankings
+          Back to Pipeline
         </Link>
         <div className="flex items-start justify-between">
           <div>
@@ -159,69 +197,249 @@ export default function StockDetailPage() {
               </p>
             )}
           </div>
-          {profile && (
-            <div className="text-right text-sm text-gray-500">
-              <div>P/E: {formatNumber(profile.pe_ratio, 1)}</div>
-              <div>P/B: {formatNumber(profile.pb_ratio, 2)}</div>
-              <div>Beta: {formatNumber(profile.beta, 2)}</div>
-            </div>
-          )}
+          <div className="flex items-start gap-4">
+            <Button onClick={() => setShowExplain(true)}>
+              <RiSparklingLine className="size-4 shrink-0 mr-1.5" />
+              Explain This Stock
+            </Button>
+            {profile && (
+              <div className="text-right text-sm text-gray-500">
+                <div>P/E: {formatNumber(profile.pe_ratio, 1)}</div>
+                <div>P/B: {formatNumber(profile.pb_ratio, 2)}</div>
+                <div>Beta: {formatNumber(profile.beta, 2)}</div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Analysis Cards */}
-      <div className="mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-50 mb-4">
-          Analysis Summary
-        </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <AnalysisCard
-            title="Graham"
-            pass={graham?.criteria_passed === 8}
-            score={graham ? `${graham.criteria_passed}/8` : undefined}
-            details={graham ? [`P/E: ${formatNumber(graham.pe_ratio, 1)}`, `P/B: ${formatNumber(graham.pb_ratio, 2)}`] : undefined}
-          />
-          <AnalysisCard
-            title="Magic Formula"
-            pass={magicFormula?.combined_rank <= 100}
-            score={magicFormula ? `Rank #${magicFormula.combined_rank}` : undefined}
-            details={magicFormula ? [`EY: ${formatPercent(magicFormula.earnings_yield)}`, `ROC: ${formatPercent(magicFormula.return_on_capital)}`] : undefined}
-          />
-          <AnalysisCard
-            title="Piotroski"
-            pass={piotroski?.f_score >= 7}
-            score={piotroski ? `F-Score: ${piotroski.f_score}/9` : undefined}
-          />
-          <AnalysisCard
-            title="Altman"
-            pass={altman?.zone === 'safe'}
-            score={altman ? `Z: ${formatNumber(altman.z_score, 2)}` : undefined}
-            details={altman ? [`Zone: ${altman.zone}`] : undefined}
-          />
-          <AnalysisCard
-            title="ROIC"
-            pass={roic?.roic_pass}
-            score={roic ? formatPercent(roic.roic) : undefined}
-            details={roic ? [`FCF 5yr: ${roic.fcf_positive_5yr ? 'Yes' : 'No'}`, `D/E: ${formatNumber(roic.debt_to_equity, 2)}`] : undefined}
-          />
-          <AnalysisCard
-            title="PEG"
-            pass={peg?.peg_pass}
-            score={peg ? `PEG: ${formatNumber(peg.peg_ratio, 2)}` : undefined}
-            details={peg ? [`Growth: ${formatPercent(peg.eps_cagr)}`] : undefined}
-          />
-          <AnalysisCard
-            title="Fama-French"
-            pass={famaFrench?.profitability_percentile >= 0.7}
-            score={famaFrench ? `Prof: ${(famaFrench.profitability_percentile * 100).toFixed(0)}%ile` : undefined}
-          />
-          <AnalysisCard
-            title="Net-Net"
-            pass={netNet?.trading_below_ncav}
-            score={netNet ? `${formatPercent(netNet.discount_to_ncav)} of NCAV` : undefined}
-            details={netNet?.deep_value ? ['Deep Value!'] : undefined}
-          />
-        </div>
+      {/* 4-Stage Pipeline Analysis */}
+      <div className="space-y-4 mb-8">
+        {/* Stage 1: Survival */}
+        <StageCard
+          title="Survival"
+          icon={<RiShieldCheckLine className="w-5 h-5 text-green-600" />}
+          status={survivalPass ? "pass" : survivalPass === false ? "fail" : "neutral"}
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Altman Z-Score</span>
+                <PassBadge pass={altmanPass} />
+              </div>
+              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                {altman ? formatNumber(altman.z_score, 2) : "N/A"}
+              </div>
+              <div className="text-xs text-gray-500">
+                Zone: {altman?.zone || "N/A"}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Piotroski F-Score</span>
+                <PassBadge pass={piotroskiPass} />
+              </div>
+              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                {piotroski ? `${piotroski.f_score}/9` : "N/A"}
+              </div>
+            </div>
+          </div>
+        </StageCard>
+
+        {/* Stage 2: Quality */}
+        <StageCard
+          title="Quality"
+          icon={
+            <span
+              className={`w-5 h-5 flex items-center justify-center rounded-full text-xs font-bold ${
+                qualityLabel === "Compounder"
+                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
+                  : qualityLabel === "Average"
+                  ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"
+                  : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+              }`}
+            >
+              Q
+            </span>
+          }
+          status={qualityLabel === "Compounder" ? "pass" : qualityLabel === "Average" ? "neutral" : "fail"}
+        >
+          <div className="flex items-center gap-4 mb-3">
+            <span
+              className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                qualityLabel === "Compounder"
+                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
+                  : qualityLabel === "Average"
+                  ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"
+                  : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+              }`}
+            >
+              {qualityLabel}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <div className="text-xs text-gray-500 mb-1">ROIC</div>
+              <div className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                {roic ? formatPercent(roic.roic) : "N/A"}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 mb-1">Free Cash Flow</div>
+              <div className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                {roic?.free_cash_flow != null ? formatCurrency(roic.free_cash_flow) : "N/A"}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 mb-1">FCF 5yr+</div>
+              <div className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                {roic?.fcf_positive_5yr ? "Yes" : "No"}
+              </div>
+            </div>
+          </div>
+        </StageCard>
+
+        {/* Stage 3: Valuation Lenses */}
+        <StageCard
+          title="Valuation Lenses"
+          icon={
+            <span className="w-5 h-5 flex items-center justify-center rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 text-xs font-bold">
+              V
+            </span>
+          }
+          status={lensesPassed.length >= 2 ? "pass" : lensesPassed.length >= 1 ? "neutral" : "fail"}
+        >
+          <div className="flex flex-wrap gap-2 mb-4">
+            {grahamPass && (
+              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                Graham
+              </span>
+            )}
+            {netNetPass && (
+              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">
+                Net-Net
+              </span>
+            )}
+            {pegPass && (
+              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300">
+                PEG
+              </span>
+            )}
+            {mfPass && (
+              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300">
+                Magic Formula
+              </span>
+            )}
+            {ffBmPass && (
+              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300">
+                FF B/M
+              </span>
+            )}
+            {lensesPassed.length === 0 && (
+              <span className="text-gray-400 text-sm">No valuation lenses passed</span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Graham</span>
+                <PassBadge pass={grahamPass} />
+              </div>
+              <div className="text-gray-900 dark:text-gray-100">
+                {graham ? `${graham.criteria_passed}/8` : "N/A"}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">Net-Net</span>
+                <PassBadge pass={netNetPass} />
+              </div>
+              <div className="text-gray-900 dark:text-gray-100">
+                {netNet ? formatPercent(netNet.discount_to_ncav) : "N/A"}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">PEG</span>
+                <PassBadge pass={pegPass} />
+              </div>
+              <div className="text-gray-900 dark:text-gray-100">
+                {peg ? formatNumber(peg.peg_ratio, 2) : "N/A"}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">MF Rank</span>
+                <PassBadge pass={mfPass} />
+              </div>
+              <div className="text-gray-900 dark:text-gray-100">
+                {magicFormula ? `#${magicFormula.combined_rank}` : "N/A"}
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">FF B/M</span>
+                <PassBadge pass={ffBmPass} />
+              </div>
+              <div className="text-gray-900 dark:text-gray-100">
+                {famaFrench?.book_to_market_percentile
+                  ? `${(famaFrench.book_to_market_percentile * 100).toFixed(0)}%ile`
+                  : "N/A"}
+              </div>
+            </div>
+          </div>
+        </StageCard>
+
+        {/* Stage 4: Factor Exposure */}
+        <StageCard
+          title="Factor Exposure"
+          icon={
+            <span className="w-5 h-5 flex items-center justify-center rounded-full bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 text-xs font-bold">
+              F
+            </span>
+          }
+          status="neutral"
+        >
+          <p className="text-xs text-gray-500 mb-3">Context for portfolio construction (never used as a filter)</p>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <div className="text-xs text-gray-500 mb-1">Size</div>
+              <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                {profile?.market_cap
+                  ? profile.market_cap >= 10e9
+                    ? "Large-Cap"
+                    : profile.market_cap >= 2e9
+                    ? "Mid-Cap"
+                    : "Small-Cap"
+                  : "N/A"}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 mb-1">Value (B/M)</div>
+              <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                {famaFrench?.book_to_market_percentile
+                  ? famaFrench.book_to_market_percentile >= 0.7
+                    ? "Value"
+                    : famaFrench.book_to_market_percentile <= 0.3
+                    ? "Growth"
+                    : "Neutral"
+                  : "N/A"}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 mb-1">Profitability</div>
+              <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                {famaFrench?.profitability_percentile
+                  ? famaFrench.profitability_percentile >= 0.7
+                    ? "High"
+                    : famaFrench.profitability_percentile <= 0.3
+                    ? "Low"
+                    : "Medium"
+                  : "N/A"}
+              </div>
+            </div>
+          </div>
+        </StageCard>
       </div>
 
       {/* Financial Data Tabs */}
@@ -232,18 +450,18 @@ export default function StockDetailPage() {
         <div className="border-b border-gray-200 dark:border-gray-800 mb-4">
           <nav className="-mb-px flex space-x-8">
             {[
-              { id: 'income', label: 'Income Statement' },
-              { id: 'balance', label: 'Balance Sheet' },
-              { id: 'cashflow', label: 'Cash Flow' },
-              { id: 'dividends', label: 'Dividends' },
+              { id: "income", label: "Income Statement" },
+              { id: "balance", label: "Balance Sheet" },
+              { id: "cashflow", label: "Cash Flow" },
+              { id: "dividends", label: "Dividends" },
             ].map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
                 className={`py-2 px-1 border-b-2 text-sm font-medium ${
                   activeTab === tab.id
-                    ? 'border-indigo-500 text-indigo-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    ? "border-indigo-500 text-indigo-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
                 }`}
               >
                 {tab.label}
@@ -252,7 +470,7 @@ export default function StockDetailPage() {
           </nav>
         </div>
 
-        {activeTab === 'income' && incomeStatements.length > 0 && (
+        {activeTab === "income" && incomeStatements.length > 0 && (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
               <thead className="bg-gray-50 dark:bg-gray-900">
@@ -268,10 +486,14 @@ export default function StockDetailPage() {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
                 {incomeStatements.slice(0, 5).map((stmt: any, i: number) => (
                   <tr key={i}>
-                    <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">{stmt.fiscal_date || stmt.date}</td>
+                    <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">
+                      {stmt.fiscal_date || stmt.date}
+                    </td>
                     <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.revenue)}</td>
                     <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.gross_profit)}</td>
-                    <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.operating_income)}</td>
+                    <td className="px-4 py-2 text-sm text-right text-gray-500">
+                      {formatCurrency(stmt.operating_income)}
+                    </td>
                     <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.net_income)}</td>
                     <td className="px-4 py-2 text-sm text-right text-gray-500">{formatNumber(stmt.eps, 2)}</td>
                   </tr>
@@ -281,7 +503,7 @@ export default function StockDetailPage() {
           </div>
         )}
 
-        {activeTab === 'balance' && balanceSheets.length > 0 && (
+        {activeTab === "balance" && balanceSheets.length > 0 && (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
               <thead className="bg-gray-50 dark:bg-gray-900">
@@ -297,11 +519,17 @@ export default function StockDetailPage() {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
                 {balanceSheets.slice(0, 5).map((stmt: any, i: number) => (
                   <tr key={i}>
-                    <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">{stmt.fiscal_date || stmt.date}</td>
+                    <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">
+                      {stmt.fiscal_date || stmt.date}
+                    </td>
                     <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.total_assets)}</td>
-                    <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.total_liabilities)}</td>
+                    <td className="px-4 py-2 text-sm text-right text-gray-500">
+                      {formatCurrency(stmt.total_liabilities)}
+                    </td>
                     <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.total_equity)}</td>
-                    <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.cash_and_equivalents)}</td>
+                    <td className="px-4 py-2 text-sm text-right text-gray-500">
+                      {formatCurrency(stmt.cash_and_equivalents)}
+                    </td>
                     <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.total_debt)}</td>
                   </tr>
                 ))}
@@ -310,7 +538,7 @@ export default function StockDetailPage() {
           </div>
         )}
 
-        {activeTab === 'cashflow' && cashFlows.length > 0 && (
+        {activeTab === "cashflow" && cashFlows.length > 0 && (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
               <thead className="bg-gray-50 dark:bg-gray-900">
@@ -325,11 +553,21 @@ export default function StockDetailPage() {
               <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
                 {cashFlows.slice(0, 5).map((stmt: any, i: number) => (
                   <tr key={i}>
-                    <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">{stmt.fiscal_date || stmt.date}</td>
-                    <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.operating_cash_flow)}</td>
-                    <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.capital_expenditure)}</td>
-                    <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.free_cash_flow)}</td>
-                    <td className="px-4 py-2 text-sm text-right text-gray-500">{formatCurrency(stmt.dividends_paid)}</td>
+                    <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">
+                      {stmt.fiscal_date || stmt.date}
+                    </td>
+                    <td className="px-4 py-2 text-sm text-right text-gray-500">
+                      {formatCurrency(stmt.operating_cash_flow)}
+                    </td>
+                    <td className="px-4 py-2 text-sm text-right text-gray-500">
+                      {formatCurrency(stmt.capital_expenditure)}
+                    </td>
+                    <td className="px-4 py-2 text-sm text-right text-gray-500">
+                      {formatCurrency(stmt.free_cash_flow)}
+                    </td>
+                    <td className="px-4 py-2 text-sm text-right text-gray-500">
+                      {formatCurrency(stmt.dividends_paid)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -337,7 +575,7 @@ export default function StockDetailPage() {
           </div>
         )}
 
-        {activeTab === 'dividends' && dividends.length > 0 && (
+        {activeTab === "dividends" && dividends.length > 0 && (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
               <thead className="bg-gray-50 dark:bg-gray-900">
@@ -360,15 +598,20 @@ export default function StockDetailPage() {
           </div>
         )}
 
-        {((activeTab === 'income' && incomeStatements.length === 0) ||
-          (activeTab === 'balance' && balanceSheets.length === 0) ||
-          (activeTab === 'cashflow' && cashFlows.length === 0) ||
-          (activeTab === 'dividends' && dividends.length === 0)) && (
-          <div className="text-center py-8 text-gray-500">
-            No data available for this section.
-          </div>
+        {((activeTab === "income" && incomeStatements.length === 0) ||
+          (activeTab === "balance" && balanceSheets.length === 0) ||
+          (activeTab === "cashflow" && cashFlows.length === 0) ||
+          (activeTab === "dividends" && dividends.length === 0)) && (
+          <div className="text-center py-8 text-gray-500">No data available for this section.</div>
         )}
       </div>
+
+      {/* AI Explain Chat Panel */}
+      <StockExplainChat
+        symbol={symbol}
+        open={showExplain}
+        onOpenChange={setShowExplain}
+      />
     </div>
   )
 }

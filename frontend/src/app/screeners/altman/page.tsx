@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from "react"
 import Link from "next/link"
 import { Badge } from "@/components/Badge"
 import { Pagination } from "@/components/Pagination"
+import { useQuarter } from "@/contexts/QuarterContext"
 import { getAltmanStocks, AltmanStock } from "@/lib/api"
 import { ScreenerInfo, SCREENER_INFO } from "@/components/ScreenerInfo"
 
@@ -28,6 +29,7 @@ function ZoneBadge({ zone }: { zone: string | null }) {
 }
 
 export default function AltmanPage() {
+  const { quarter } = useQuarter()
   const [stocks, setStocks] = useState<AltmanStock[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -50,7 +52,7 @@ export default function AltmanPage() {
     async function fetchData() {
       try {
         setLoading(true)
-        const data = await getAltmanStocks(zone, 200)
+        const data = await getAltmanStocks(zone, 200, quarter)
         setStocks(data.stocks)
         setError(null)
       } catch (err) {
@@ -61,7 +63,7 @@ export default function AltmanPage() {
       }
     }
     fetchData()
-  }, [zone])
+  }, [zone, quarter])
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">

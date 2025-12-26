@@ -44,7 +44,7 @@ class GrahamResult(BaseAnalysisResult):
     pe_x_pb: float | None = None
 
     # Score
-    criteria_passed: int | None = Field(None, ge=0, le=7)
+    criteria_passed: int | None = Field(None, ge=0, le=8)
 
 
 class MagicFormulaResult(BaseAnalysisResult):

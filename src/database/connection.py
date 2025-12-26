@@ -29,7 +29,6 @@ class DatabaseManager:
     def connect(self) -> duckdb.DuckDBPyConnection:
         """Create a new connection to the database."""
         conn = duckdb.connect(str(self.db_path))
-        # Enable WAL mode for better concurrent access
         conn.execute("PRAGMA enable_progress_bar=false")
         return conn
 

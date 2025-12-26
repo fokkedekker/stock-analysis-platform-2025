@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
+    # Cerebras API for AI explanations (optional)
+    CEREBRAS_API_KEY: str | None = None
+
     @property
     def database_path(self) -> Path:
         """Get database path as Path object, creating parent dirs if needed."""

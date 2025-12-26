@@ -4,12 +4,14 @@ import { useEffect, useState, useMemo } from "react"
 import Link from "next/link"
 import { Badge } from "@/components/Badge"
 import { Pagination } from "@/components/Pagination"
+import { useQuarter } from "@/contexts/QuarterContext"
 import { getMagicFormulaStocks, MagicFormulaStock, formatPercent } from "@/lib/api"
 import { ScreenerInfo, SCREENER_INFO } from "@/components/ScreenerInfo"
 
 const ITEMS_PER_PAGE = 50
 
 export default function MagicFormulaPage() {
+  const { quarter } = useQuarter()
   const [stocks, setStocks] = useState<MagicFormulaStock[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -32,7 +34,7 @@ export default function MagicFormulaPage() {
     async function fetchData() {
       try {
         setLoading(true)
-        const data = await getMagicFormulaStocks(top)
+        const data = await getMagicFormulaStocks(top, quarter)
         setStocks(data.stocks)
         setError(null)
       } catch (err) {
@@ -43,7 +45,7 @@ export default function MagicFormulaPage() {
       }
     }
     fetchData()
-  }, [top])
+  }, [top, quarter])
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">

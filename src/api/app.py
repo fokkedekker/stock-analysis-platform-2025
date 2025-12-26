@@ -3,7 +3,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import tickers, financials, analysis, screener
+from src.api.routes import tickers, financials, analysis, screener, explain, backtest
+from src.database.connection import get_db_manager
+
 
 app = FastAPI(
     title="Stock Analysis API",
@@ -27,6 +29,8 @@ app.include_router(tickers.router, prefix="/api/v1/tickers", tags=["Tickers"])
 app.include_router(financials.router, prefix="/api/v1/financials", tags=["Financials"])
 app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
 app.include_router(screener.router, prefix="/api/v1/screener", tags=["Screener"])
+app.include_router(explain.router, prefix="/api/v1/explain", tags=["Explain"])
+app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["Backtest"])
 
 
 @app.get("/")
@@ -42,8 +46,6 @@ async def root():
 @app.get("/api/v1/status")
 async def status():
     """Get API status and data freshness."""
-    from src.database.connection import get_db_manager
-
     db = get_db_manager()
 
     with db.get_connection() as conn:
