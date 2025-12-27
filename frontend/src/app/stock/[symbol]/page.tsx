@@ -297,6 +297,107 @@ export default function StockDetailPage() {
               </div>
             </div>
           </div>
+
+          {/* Advanced Quality Metrics */}
+          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Quality Analysis</h4>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">ROIC Stability</span>
+                <span className={`font-medium ${
+                  roic?.roic_stability_tag === "stable" ? "text-emerald-600 dark:text-emerald-400" :
+                  roic?.roic_stability_tag === "volatile" ? "text-red-600 dark:text-red-400" :
+                  "text-gray-700 dark:text-gray-300"
+                }`}>
+                  {roic?.roic_stability_tag || "N/A"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Margin Stability</span>
+                <span className={`font-medium ${
+                  roic?.gross_margin_stability_tag === "stable" ? "text-emerald-600 dark:text-emerald-400" :
+                  roic?.gross_margin_stability_tag === "volatile" ? "text-red-600 dark:text-red-400" :
+                  "text-gray-700 dark:text-gray-300"
+                }`}>
+                  {roic?.gross_margin_stability_tag || "N/A"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">FCF Yield</span>
+                <span className="font-medium text-gray-700 dark:text-gray-300">
+                  {roic?.fcf_yield != null ? formatPercent(roic.fcf_yield) : "N/A"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">EV/EBIT</span>
+                <span className="font-medium text-gray-700 dark:text-gray-300">
+                  {roic?.ev_to_ebit != null ? `${roic.ev_to_ebit.toFixed(1)}x` : "N/A"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Reinvestment</span>
+                <span className={`font-medium ${
+                  roic?.reinvestment_tag === "aggressive" ? "text-amber-600 dark:text-amber-400" :
+                  "text-gray-700 dark:text-gray-300"
+                }`}>
+                  {roic?.reinvestment_tag || "N/A"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Earnings Quality</span>
+                <span className={`font-medium ${
+                  roic?.earnings_quality_tag === "strong" ? "text-emerald-600 dark:text-emerald-400" :
+                  roic?.earnings_quality_tag === "poor" ? "text-red-600 dark:text-red-400" :
+                  "text-gray-700 dark:text-gray-300"
+                }`}>
+                  {roic?.earnings_quality_tag || "N/A"}
+                </span>
+              </div>
+            </div>
+
+            {/* Quality Tags */}
+            {(() => {
+              // Parse quality_tags (may be JSON string or array)
+              let parsedTags: string[] = []
+              if (roic?.quality_tags) {
+                if (typeof roic.quality_tags === "string") {
+                  try {
+                    parsedTags = JSON.parse(roic.quality_tags)
+                  } catch {
+                    parsedTags = []
+                  }
+                } else if (Array.isArray(roic.quality_tags)) {
+                  parsedTags = roic.quality_tags
+                }
+              }
+
+              if (parsedTags.length === 0) return null
+
+              const tagColors: Record<string, string> = {
+                "Durable Compounder": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
+                "Cash Machine": "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+                "Deep Value": "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
+                "Heavy Reinvestor": "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
+                "Volatile Returns": "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
+                "Earnings Quality Concern": "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300",
+                "Premium Priced": "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+                "Weak Moat Signal": "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300",
+              }
+
+              return (
+                <div className="mt-3 flex flex-wrap gap-1">
+                  {parsedTags.map((tag: string) => (
+                    <span
+                      key={tag}
+                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${tagColors[tag] || "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"}`}
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )
+            })()}
+          </div>
         </StageCard>
 
         {/* Stage 3: Valuation Lenses */}

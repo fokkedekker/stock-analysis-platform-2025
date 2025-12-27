@@ -1,5 +1,7 @@
 """Stock screener API routes."""
 
+import json
+
 from fastapi import APIRouter, Query
 
 from src.database.connection import get_db_manager
@@ -509,6 +511,11 @@ async def screen_pipeline(
     max_peg: float = Query(1.5, ge=0, le=10),
     mf_top_pct: int = Query(20, ge=1, le=100),
     ff_bm_top_pct: int = Query(30, ge=1, le=100),
+    # Tag filter (optional)
+    quality_tags_filter: str | None = Query(
+        None,
+        description="Comma-separated list of quality tags to filter by (e.g. 'Durable Compounder,Cash Machine')",
+    ),
     # Ranking
     rank_by: str = Query(
         "magic-formula",
@@ -570,6 +577,13 @@ async def screen_pipeline(
                         WHEN r.roic >= 0.08 THEN 'average'
                         ELSE 'weak'
                     END as quality_label,
+                    -- NEW: Quality metrics (stability, valuation, tags)
+                    r.roic_stability_tag,
+                    r.gross_margin_stability_tag,
+                    r.fcf_yield,
+                    r.ev_to_ebit,
+                    r.valuation_tag,
+                    r.quality_tags,
 
                     -- Stage 3: Valuation lens data
                     g.criteria_passed as graham_score,
@@ -721,9 +735,41 @@ async def screen_pipeline(
         ).fetchall()
 
         columns = [desc[0] for desc in conn.description]
+
+        # Parse tag filter if provided
+        filter_tags = None
+        if quality_tags_filter:
+            filter_tags = set(t.strip() for t in quality_tags_filter.split(",") if t.strip())
+
+        # All possible quality tags
+        ALL_QUALITY_TAGS = {
+            "Durable Compounder", "Cash Machine", "Deep Value", "Heavy Reinvestor",
+            "Volatile Returns", "Earnings Quality Concern", "Premium Priced", "Weak Moat Signal"
+        }
+
         stocks = []
         for row in result:
             stock = dict(zip(columns, row))
+
+            # Parse quality_tags from JSON string
+            stock_tags = set()
+            if stock.get("quality_tags"):
+                try:
+                    stock_tags = set(json.loads(stock["quality_tags"]))
+                except (json.JSONDecodeError, TypeError):
+                    stock_tags = set()
+
+            # Apply tag filter if specified
+            # Stock must have at least one selected tag AND must NOT have any excluded tags
+            if filter_tags:
+                excluded_tags = ALL_QUALITY_TAGS - filter_tags
+                # Check if stock has any excluded tags
+                if stock_tags & excluded_tags:
+                    continue
+                # Check if stock has at least one of the selected tags
+                if not (stock_tags & filter_tags):
+                    continue
+
             # Build valuation lenses passed list
             lenses = []
             if lens_graham and stock.get("graham_passed"):

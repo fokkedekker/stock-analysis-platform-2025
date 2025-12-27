@@ -390,6 +390,22 @@ CREATE TABLE IF NOT EXISTS roic_quality_results (
     criteria_passed INTEGER,
     data_quality DECIMAL,
     missing_fields JSON,
+    -- NEW: Stability metrics (5yr std dev)
+    roic_std_dev DECIMAL,
+    roic_stability_tag VARCHAR,
+    gross_margin_std_dev DECIMAL,
+    gross_margin_stability_tag VARCHAR,
+    -- NEW: Quality metrics
+    fcf_to_net_income DECIMAL,
+    earnings_quality_tag VARCHAR,
+    reinvestment_rate DECIMAL,
+    reinvestment_tag VARCHAR,
+    -- NEW: Valuation metrics
+    fcf_yield DECIMAL,
+    ev_to_ebit DECIMAL,
+    valuation_tag VARCHAR,
+    -- NEW: Aggregate tags
+    quality_tags JSON,
     PRIMARY KEY(symbol, analysis_quarter)
 )
 """

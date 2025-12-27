@@ -113,6 +113,26 @@ export interface NetNetStock extends Stock {
 export type QualityLabel = 'compounder' | 'average' | 'weak';
 export type RankMethod = 'magic-formula' | 'earnings-yield' | 'roic' | 'peg' | 'graham-score' | 'net-net-discount';
 export type ValuationLens = 'graham' | 'net-net' | 'peg' | 'magic-formula' | 'fama-french-bm';
+export type QualityTag =
+  | 'Durable Compounder'
+  | 'Cash Machine'
+  | 'Deep Value'
+  | 'Heavy Reinvestor'
+  | 'Volatile Returns'
+  | 'Earnings Quality Concern'
+  | 'Premium Priced'
+  | 'Weak Moat Signal';
+
+export const QUALITY_TAGS: QualityTag[] = [
+  'Durable Compounder',
+  'Cash Machine',
+  'Deep Value',
+  'Heavy Reinvestor',
+  'Volatile Returns',
+  'Earnings Quality Concern',
+  'Premium Priced',
+  'Weak Moat Signal',
+];
 
 export interface PipelineStock extends Stock {
   // Stage 1: Survival
@@ -127,6 +147,13 @@ export interface PipelineStock extends Stock {
   free_cash_flow: number | null;
   fcf_positive_5yr: boolean | null;
   quality_label: QualityLabel;
+  // NEW: Quality metrics (stability, valuation, tags)
+  roic_stability_tag: string | null;
+  gross_margin_stability_tag: string | null;
+  fcf_yield: number | null;
+  ev_to_ebit: number | null;
+  valuation_tag: string | null;
+  quality_tags: string[] | string | null; // Can be array or JSON string from API
 
   // Stage 3: Valuation
   graham_score: number | null;
@@ -198,6 +225,7 @@ export interface PipelineParams {
   // Stage 2
   quality_filter?: boolean;
   min_quality?: QualityLabel;
+  quality_tags_filter?: QualityTag[];
   // Stage 3
   min_valuation_lenses?: number;
   strict_mode?: boolean;
@@ -256,6 +284,21 @@ export async function getQuarters(): Promise<QuartersResponse> {
   return res.json();
 }
 
+// Stock Search
+export interface SearchResult {
+  symbol: string;
+  name: string;
+  exchange: string | null;
+  sector: string | null;
+}
+
+export async function searchStocks(query: string, limit = 10): Promise<SearchResult[]> {
+  if (!query || query.length < 1) return [];
+  const res = await fetch(`${API_BASE}/tickers/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
 // API Functions
 
 // Rankings
@@ -280,6 +323,9 @@ export async function getPipelineStocks(params: PipelineParams = {}, quarter?: s
   // Stage 2
   if (params.quality_filter !== undefined) searchParams.set('quality_filter', String(params.quality_filter));
   if (params.min_quality) searchParams.set('min_quality', params.min_quality);
+  if (params.quality_tags_filter && params.quality_tags_filter.length > 0) {
+    searchParams.set('quality_tags_filter', params.quality_tags_filter.join(','));
+  }
 
   // Stage 3
   if (params.min_valuation_lenses !== undefined) searchParams.set('min_valuation_lenses', String(params.min_valuation_lenses));

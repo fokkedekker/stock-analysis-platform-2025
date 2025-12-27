@@ -9,6 +9,7 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from "@/components/Drawer"
+import { StockSearch } from "@/components/StockSearch"
 import { cx, focusRing } from "@/lib/utils"
 import {
   RiBarChartBoxLine,
@@ -68,9 +69,10 @@ export default function MobileSidebar() {
             <DrawerTitle>Stock Analysis</DrawerTitle>
           </DrawerHeader>
           <DrawerBody>
+            <StockSearch />
             <nav
               aria-label="core mobile navigation links"
-              className="flex flex-1 flex-col space-y-10"
+              className="flex flex-1 flex-col space-y-10 mt-4"
             >
               <ul role="list" className="space-y-1.5">
                 {navigation.map((item) => (

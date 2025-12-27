@@ -1,6 +1,7 @@
 "use client"
 import { siteConfig } from "@/app/siteConfig"
 import { QuarterSelector } from "@/components/QuarterSelector"
+import { StockSearch } from "@/components/StockSearch"
 import { cx, focusRing } from "@/lib/utils"
 import {
   RiBarChartBoxLine,
@@ -140,6 +141,7 @@ export function Sidebar() {
               Stock Analysis
             </span>
           </div>
+          <StockSearch />
           <QuarterSelector />
           <nav
             aria-label="core navigation links"
