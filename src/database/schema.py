@@ -520,6 +520,16 @@ ALL_TABLES = [
     ("fetch_log", FETCH_LOG_TABLE),
 ]
 
+# Performance indexes for analysis queries
+ALL_INDEXES = [
+    ("idx_income_period_symbol", "CREATE INDEX IF NOT EXISTS idx_income_period_symbol ON income_statements(period, symbol, fiscal_date DESC)"),
+    ("idx_balance_period_symbol", "CREATE INDEX IF NOT EXISTS idx_balance_period_symbol ON balance_sheets(period, symbol, fiscal_date DESC)"),
+    ("idx_cashflow_period_symbol", "CREATE INDEX IF NOT EXISTS idx_cashflow_period_symbol ON cash_flow_statements(period, symbol, fiscal_date DESC)"),
+    ("idx_metrics_period_symbol", "CREATE INDEX IF NOT EXISTS idx_metrics_period_symbol ON key_metrics(period, symbol, fiscal_date DESC)"),
+    ("idx_dividends_symbol", "CREATE INDEX IF NOT EXISTS idx_dividends_symbol ON dividends(symbol, ex_date DESC)"),
+    ("idx_profiles_quarter", "CREATE INDEX IF NOT EXISTS idx_profiles_quarter ON company_profiles(fiscal_quarter, symbol)"),
+]
+
 
 def create_all_tables(conn: duckdb.DuckDBPyConnection | None = None) -> None:
     """Create all database tables if they don't exist.
@@ -543,6 +553,42 @@ def _create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             logger.info(f"Created/verified table: {table_name}")
         except Exception as e:
             logger.error(f"Error creating table {table_name}: {e}")
+            raise
+
+    # Create indexes for performance
+    for index_name, create_sql in ALL_INDEXES:
+        try:
+            conn.execute(create_sql)
+            logger.info(f"Created/verified index: {index_name}")
+        except Exception as e:
+            logger.error(f"Error creating index {index_name}: {e}")
+            raise
+
+
+def create_indexes(conn: duckdb.DuckDBPyConnection | None = None) -> None:
+    """Create performance indexes on existing database.
+
+    This can be run on an existing database to add indexes.
+
+    Args:
+        conn: Optional existing connection. Creates new one if not provided.
+    """
+    if conn is None:
+        db = get_db_manager()
+        with db.get_connection() as conn:
+            _create_indexes(conn)
+    else:
+        _create_indexes(conn)
+
+
+def _create_indexes(conn: duckdb.DuckDBPyConnection) -> None:
+    """Internal function to create indexes."""
+    for index_name, create_sql in ALL_INDEXES:
+        try:
+            conn.execute(create_sql)
+            logger.info(f"Created index: {index_name}")
+        except Exception as e:
+            logger.error(f"Error creating index {index_name}: {e}")
             raise
 
 

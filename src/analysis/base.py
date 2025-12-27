@@ -6,9 +6,12 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Generator
+from typing import TYPE_CHECKING, Any, Generator
 
 from src.database.connection import get_db_manager
+
+if TYPE_CHECKING:
+    from src.analysis.bulk_loader import BulkDataLoader
 
 
 def to_float(val):
@@ -52,10 +55,16 @@ def quarter_to_end_date(quarter: str) -> str:
 class BaseAnalyzer(ABC):
     """Abstract base class for all fundamental analysis systems."""
 
-    def __init__(self):
-        """Initialize base analyzer."""
+    def __init__(self, bulk_loader: "BulkDataLoader | None" = None):
+        """Initialize base analyzer.
+
+        Args:
+            bulk_loader: Optional BulkDataLoader for high-performance batch analysis.
+                        When provided, uses pre-loaded in-memory data instead of DB queries.
+        """
         self.db = get_db_manager()
         self._conn = None  # Reusable connection for batch operations
+        self._bulk_loader = bulk_loader  # For high-performance batch mode
 
     @contextmanager
     def connection_scope(self) -> Generator[None, None, None]:
@@ -123,6 +132,11 @@ class BaseAnalyzer(ABC):
         Returns:
             List of income statement records ordered by date descending.
         """
+        # Use bulk loader if available (high-performance mode)
+        if self._bulk_loader is not None:
+            return self._bulk_loader.get_income_statements(symbol, limit)
+
+        # Fall back to per-symbol DB query
         conn = self._get_conn()
         try:
             if as_of_date:
@@ -167,6 +181,11 @@ class BaseAnalyzer(ABC):
             limit: Maximum number of records.
             as_of_date: Only include statements with fiscal_date <= this date.
         """
+        # Use bulk loader if available (high-performance mode)
+        if self._bulk_loader is not None:
+            return self._bulk_loader.get_balance_sheets(symbol, limit)
+
+        # Fall back to per-symbol DB query
         conn = self._get_conn()
         try:
             if as_of_date:
@@ -211,6 +230,11 @@ class BaseAnalyzer(ABC):
             limit: Maximum number of records.
             as_of_date: Only include statements with fiscal_date <= this date.
         """
+        # Use bulk loader if available (high-performance mode)
+        if self._bulk_loader is not None:
+            return self._bulk_loader.get_cash_flow_statements(symbol, limit)
+
+        # Fall back to per-symbol DB query
         conn = self._get_conn()
         try:
             if as_of_date:
@@ -255,6 +279,11 @@ class BaseAnalyzer(ABC):
             limit: Maximum number of records.
             as_of_date: Only include metrics with fiscal_date <= this date.
         """
+        # Use bulk loader if available (high-performance mode)
+        if self._bulk_loader is not None:
+            return self._bulk_loader.get_key_metrics(symbol, limit)
+
+        # Fall back to per-symbol DB query
         conn = self._get_conn()
         try:
             if as_of_date:
@@ -294,6 +323,11 @@ class BaseAnalyzer(ABC):
             quarter: Specific quarter to get profile for (e.g., '2024Q1').
                      If None, returns most recent profile.
         """
+        # Use bulk loader if available (high-performance mode)
+        if self._bulk_loader is not None:
+            return self._bulk_loader.get_company_profile(symbol, quarter)
+
+        # Fall back to per-symbol DB query
         conn = self._get_conn()
         try:
             if quarter:
@@ -337,6 +371,11 @@ class BaseAnalyzer(ABC):
             years: Number of years of history to fetch.
             as_of_date: Only include dividends with ex_date <= this date.
         """
+        # Use bulk loader if available (high-performance mode)
+        if self._bulk_loader is not None:
+            return self._bulk_loader.get_dividends(symbol)
+
+        # Fall back to per-symbol DB query
         conn = self._get_conn()
         try:
             # Calculate cutoff date - if as_of_date provided, go back from there

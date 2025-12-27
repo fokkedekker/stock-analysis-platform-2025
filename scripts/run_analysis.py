@@ -39,6 +39,8 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 from src.database.connection import get_db_manager
+from src.analysis.base import quarter_to_end_date
+from src.analysis.bulk_loader import BulkDataLoader
 from src.analysis.graham import GrahamAnalyzer
 from src.analysis.magic_formula import MagicFormulaAnalyzer
 from src.analysis.piotroski import PiotroskiAnalyzer
@@ -231,6 +233,15 @@ def run_analysis_for_quarter(quarter: str, args, symbols: list[str]) -> tuple[in
 
     console.print(f"\n[bold cyan]═══ Analyzing quarter: {quarter} ═══[/bold cyan]")
 
+    # Load all data upfront for high-performance analysis
+    as_of_date = quarter_to_end_date(quarter)
+    console.print(f"[dim]Loading data (as_of_date={as_of_date})...[/dim]")
+    import time
+    start_time = time.time()
+    bulk_loader = BulkDataLoader(period="annual", as_of_date=as_of_date)
+    load_time = time.time() - start_time
+    console.print(f"[dim]Data loaded in {load_time:.1f}s[/dim]")
+
     # Filter analyzers based on args
     analyzers_to_run = []
     started = args.start is None  # If no --start, start immediately
@@ -249,7 +260,8 @@ def run_analysis_for_quarter(quarter: str, args, symbols: list[str]) -> tuple[in
             if not matches:
                 continue
 
-        analyzers_to_run.append((cls(**kwargs), name))
+        # Pass bulk_loader to analyzer for high-performance mode
+        analyzers_to_run.append((cls(bulk_loader=bulk_loader, **kwargs), name))
 
     if not analyzers_to_run:
         console.print("[red]No analyzers matched the specified criteria.[/red]")
@@ -408,6 +420,15 @@ def main():
 
             console.print(f"\n[bold cyan]═══ Analyzing quarter: {quarter} ═══[/bold cyan]")
 
+            # Load all data upfront for high-performance analysis
+            as_of_date = quarter_to_end_date(quarter)
+            console.print(f"[dim]Loading data (as_of_date={as_of_date})...[/dim]")
+            import time
+            start_time = time.time()
+            bulk_loader = BulkDataLoader(period="annual", as_of_date=as_of_date)
+            load_time = time.time() - start_time
+            console.print(f"[dim]Data loaded in {load_time:.1f}s[/dim]")
+
             # Filter analyzers
             analyzers_to_run = []
             started = args.start is None
@@ -428,7 +449,7 @@ def main():
                     break
 
                 console.print(f"\n[yellow]{name}[/yellow]")
-                success, failed = run_analyzer_parallel(cls, kwargs, symbols, quarter, name, num_workers)
+                success, failed = run_analyzer_parallel(cls, {**kwargs, "bulk_loader": bulk_loader}, symbols, quarter, name, num_workers)
                 grand_total_success += success
                 grand_total_failed += failed
 

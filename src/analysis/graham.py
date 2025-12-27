@@ -5,7 +5,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from typing import TYPE_CHECKING
+
 from src.analysis.base import BaseAnalyzer, to_float, quarter_to_end_date
+
+if TYPE_CHECKING:
+    from src.analysis.bulk_loader import BulkDataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +62,18 @@ THRESHOLDS = {
 class GrahamAnalyzer(BaseAnalyzer):
     """Analyzer for Benjamin Graham's 7 criteria."""
 
-    def __init__(self, mode: Literal["strict", "modern", "garp", "relaxed"] = "strict"):
+    def __init__(
+        self,
+        mode: Literal["strict", "modern", "garp", "relaxed"] = "strict",
+        bulk_loader: "BulkDataLoader | None" = None,
+    ):
         """Initialize Graham analyzer.
 
         Args:
             mode: Analysis mode determining threshold strictness.
+            bulk_loader: Optional BulkDataLoader for high-performance batch analysis.
         """
-        super().__init__()
+        super().__init__(bulk_loader=bulk_loader)
         self.mode = mode
         self.thresholds = THRESHOLDS[mode]
 
