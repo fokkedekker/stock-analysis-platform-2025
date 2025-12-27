@@ -29,6 +29,26 @@ def to_float(val):
 logger = logging.getLogger(__name__)
 
 
+def quarter_to_end_date(quarter: str) -> str:
+    """Convert quarter string to end date.
+
+    Args:
+        quarter: Quarter string like '2024Q1'.
+
+    Returns:
+        End date string like '2024-03-31'.
+    """
+    year = int(quarter[:4])
+    q = int(quarter[-1])
+    end_dates = {
+        1: f"{year}-03-31",
+        2: f"{year}-06-30",
+        3: f"{year}-09-30",
+        4: f"{year}-12-31",
+    }
+    return end_dates[q]
+
+
 class BaseAnalyzer(ABC):
     """Abstract base class for all fundamental analysis systems."""
 
@@ -90,6 +110,7 @@ class BaseAnalyzer(ABC):
         symbol: str,
         period: str = "annual",
         limit: int = 10,
+        as_of_date: str | None = None,
     ) -> list[dict[str, Any]]:
         """Get income statements for a symbol.
 
@@ -97,21 +118,33 @@ class BaseAnalyzer(ABC):
             symbol: Stock ticker symbol.
             period: 'annual' or 'quarter'.
             limit: Maximum number of records.
+            as_of_date: Only include statements with fiscal_date <= this date.
 
         Returns:
             List of income statement records ordered by date descending.
         """
         conn = self._get_conn()
         try:
-            result = conn.execute(
-                """
-                SELECT * FROM income_statements
-                WHERE symbol = ? AND period = ?
-                ORDER BY fiscal_date DESC
-                LIMIT ?
-                """,
-                (symbol, period, limit),
-            ).fetchall()
+            if as_of_date:
+                result = conn.execute(
+                    """
+                    SELECT * FROM income_statements
+                    WHERE symbol = ? AND period = ? AND fiscal_date <= ?
+                    ORDER BY fiscal_date DESC
+                    LIMIT ?
+                    """,
+                    (symbol, period, as_of_date, limit),
+                ).fetchall()
+            else:
+                result = conn.execute(
+                    """
+                    SELECT * FROM income_statements
+                    WHERE symbol = ? AND period = ?
+                    ORDER BY fiscal_date DESC
+                    LIMIT ?
+                    """,
+                    (symbol, period, limit),
+                ).fetchall()
 
             columns = [desc[0] for desc in conn.description]
             return [dict(zip(columns, row)) for row in result]
@@ -124,19 +157,38 @@ class BaseAnalyzer(ABC):
         symbol: str,
         period: str = "annual",
         limit: int = 10,
+        as_of_date: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Get balance sheets for a symbol."""
+        """Get balance sheets for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol.
+            period: 'annual' or 'quarter'.
+            limit: Maximum number of records.
+            as_of_date: Only include statements with fiscal_date <= this date.
+        """
         conn = self._get_conn()
         try:
-            result = conn.execute(
-                """
-                SELECT * FROM balance_sheets
-                WHERE symbol = ? AND period = ?
-                ORDER BY fiscal_date DESC
-                LIMIT ?
-                """,
-                (symbol, period, limit),
-            ).fetchall()
+            if as_of_date:
+                result = conn.execute(
+                    """
+                    SELECT * FROM balance_sheets
+                    WHERE symbol = ? AND period = ? AND fiscal_date <= ?
+                    ORDER BY fiscal_date DESC
+                    LIMIT ?
+                    """,
+                    (symbol, period, as_of_date, limit),
+                ).fetchall()
+            else:
+                result = conn.execute(
+                    """
+                    SELECT * FROM balance_sheets
+                    WHERE symbol = ? AND period = ?
+                    ORDER BY fiscal_date DESC
+                    LIMIT ?
+                    """,
+                    (symbol, period, limit),
+                ).fetchall()
 
             columns = [desc[0] for desc in conn.description]
             return [dict(zip(columns, row)) for row in result]
@@ -149,19 +201,38 @@ class BaseAnalyzer(ABC):
         symbol: str,
         period: str = "annual",
         limit: int = 10,
+        as_of_date: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Get cash flow statements for a symbol."""
+        """Get cash flow statements for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol.
+            period: 'annual' or 'quarter'.
+            limit: Maximum number of records.
+            as_of_date: Only include statements with fiscal_date <= this date.
+        """
         conn = self._get_conn()
         try:
-            result = conn.execute(
-                """
-                SELECT * FROM cash_flow_statements
-                WHERE symbol = ? AND period = ?
-                ORDER BY fiscal_date DESC
-                LIMIT ?
-                """,
-                (symbol, period, limit),
-            ).fetchall()
+            if as_of_date:
+                result = conn.execute(
+                    """
+                    SELECT * FROM cash_flow_statements
+                    WHERE symbol = ? AND period = ? AND fiscal_date <= ?
+                    ORDER BY fiscal_date DESC
+                    LIMIT ?
+                    """,
+                    (symbol, period, as_of_date, limit),
+                ).fetchall()
+            else:
+                result = conn.execute(
+                    """
+                    SELECT * FROM cash_flow_statements
+                    WHERE symbol = ? AND period = ?
+                    ORDER BY fiscal_date DESC
+                    LIMIT ?
+                    """,
+                    (symbol, period, limit),
+                ).fetchall()
 
             columns = [desc[0] for desc in conn.description]
             return [dict(zip(columns, row)) for row in result]
@@ -174,19 +245,38 @@ class BaseAnalyzer(ABC):
         symbol: str,
         period: str = "annual",
         limit: int = 10,
+        as_of_date: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Get key metrics for a symbol."""
+        """Get key metrics for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol.
+            period: 'annual' or 'quarter'.
+            limit: Maximum number of records.
+            as_of_date: Only include metrics with fiscal_date <= this date.
+        """
         conn = self._get_conn()
         try:
-            result = conn.execute(
-                """
-                SELECT * FROM key_metrics
-                WHERE symbol = ? AND period = ?
-                ORDER BY fiscal_date DESC
-                LIMIT ?
-                """,
-                (symbol, period, limit),
-            ).fetchall()
+            if as_of_date:
+                result = conn.execute(
+                    """
+                    SELECT * FROM key_metrics
+                    WHERE symbol = ? AND period = ? AND fiscal_date <= ?
+                    ORDER BY fiscal_date DESC
+                    LIMIT ?
+                    """,
+                    (symbol, period, as_of_date, limit),
+                ).fetchall()
+            else:
+                result = conn.execute(
+                    """
+                    SELECT * FROM key_metrics
+                    WHERE symbol = ? AND period = ?
+                    ORDER BY fiscal_date DESC
+                    LIMIT ?
+                    """,
+                    (symbol, period, limit),
+                ).fetchall()
 
             columns = [desc[0] for desc in conn.description]
             return [dict(zip(columns, row)) for row in result]
@@ -194,19 +284,37 @@ class BaseAnalyzer(ABC):
             if self._should_close_conn(conn):
                 conn.close()
 
-    def get_company_profile(self, symbol: str) -> dict[str, Any] | None:
-        """Get most recent company profile."""
+    def get_company_profile(
+        self, symbol: str, quarter: str | None = None
+    ) -> dict[str, Any] | None:
+        """Get company profile for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol.
+            quarter: Specific quarter to get profile for (e.g., '2024Q1').
+                     If None, returns most recent profile.
+        """
         conn = self._get_conn()
         try:
-            result = conn.execute(
-                """
-                SELECT * FROM company_profiles
-                WHERE symbol = ?
-                ORDER BY fiscal_quarter DESC
-                LIMIT 1
-                """,
-                (symbol,),
-            ).fetchone()
+            if quarter:
+                result = conn.execute(
+                    """
+                    SELECT * FROM company_profiles
+                    WHERE symbol = ? AND fiscal_quarter = ?
+                    LIMIT 1
+                    """,
+                    (symbol, quarter),
+                ).fetchone()
+            else:
+                result = conn.execute(
+                    """
+                    SELECT * FROM company_profiles
+                    WHERE symbol = ?
+                    ORDER BY fiscal_quarter DESC
+                    LIMIT 1
+                    """,
+                    (symbol,),
+                ).fetchone()
 
             if result:
                 columns = [desc[0] for desc in conn.description]
@@ -220,21 +328,43 @@ class BaseAnalyzer(ABC):
         self,
         symbol: str,
         years: int = 5,
+        as_of_date: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Get dividend history for a symbol."""
+        """Get dividend history for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol.
+            years: Number of years of history to fetch.
+            as_of_date: Only include dividends with ex_date <= this date.
+        """
         conn = self._get_conn()
         try:
-            # Calculate cutoff date in Python since DuckDB doesn't support parameterized intervals
-            cutoff_date = (datetime.now(timezone.utc) - timedelta(days=years * 365)).strftime('%Y-%m-%d')
-            result = conn.execute(
-                """
-                SELECT * FROM dividends
-                WHERE symbol = ?
-                AND ex_date >= ?
-                ORDER BY ex_date DESC
-                """,
-                (symbol, cutoff_date),
-            ).fetchall()
+            # Calculate cutoff date - if as_of_date provided, go back from there
+            if as_of_date:
+                # Parse as_of_date and subtract years
+                as_of_dt = datetime.strptime(as_of_date, '%Y-%m-%d')
+                cutoff_date = (as_of_dt - timedelta(days=years * 365)).strftime('%Y-%m-%d')
+                result = conn.execute(
+                    """
+                    SELECT * FROM dividends
+                    WHERE symbol = ?
+                    AND ex_date >= ?
+                    AND ex_date <= ?
+                    ORDER BY ex_date DESC
+                    """,
+                    (symbol, cutoff_date, as_of_date),
+                ).fetchall()
+            else:
+                cutoff_date = (datetime.now(timezone.utc) - timedelta(days=years * 365)).strftime('%Y-%m-%d')
+                result = conn.execute(
+                    """
+                    SELECT * FROM dividends
+                    WHERE symbol = ?
+                    AND ex_date >= ?
+                    ORDER BY ex_date DESC
+                    """,
+                    (symbol, cutoff_date),
+                ).fetchall()
 
             columns = [desc[0] for desc in conn.description]
             return [dict(zip(columns, row)) for row in result]

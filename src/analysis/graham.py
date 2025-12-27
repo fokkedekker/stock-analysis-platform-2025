@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from src.analysis.base import BaseAnalyzer, to_float
+from src.analysis.base import BaseAnalyzer, to_float, quarter_to_end_date
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +103,12 @@ class GrahamAnalyzer(BaseAnalyzer):
             "missing_fields": [],
         }
 
-        # Get financial data
-        income_stmts = self.get_income_statements(symbol, "annual", limit=6)
-        balance_sheets = self.get_balance_sheets(symbol, "annual", limit=2)
-        profile = self.get_company_profile(symbol)
-        dividends = self.get_dividends(symbol, years=6)
+        # Get financial data (filtered by quarter end date for point-in-time analysis)
+        as_of = quarter_to_end_date(quarter)
+        income_stmts = self.get_income_statements(symbol, "annual", limit=6, as_of_date=as_of)
+        balance_sheets = self.get_balance_sheets(symbol, "annual", limit=2, as_of_date=as_of)
+        profile = self.get_company_profile(symbol, quarter=quarter)
+        dividends = self.get_dividends(symbol, years=6, as_of_date=as_of)
 
         if not income_stmts or not balance_sheets:
             results["data_quality"] = 0.0

@@ -304,7 +304,7 @@ class DataFetcher:
                             self._safe_decimal(stmt.get("operatingIncome")),
                             self._safe_decimal(stmt.get("operatingIncomeRatio")),
                             self._safe_decimal(stmt.get("interestExpense")),
-                            self._safe_decimal(stmt.get("ebitda")),  # FMP uses ebitda field
+                            self._safe_decimal(stmt.get("ebit")),  # EBIT from FMP
                             self._safe_decimal(stmt.get("ebitda")),
                             self._safe_decimal(stmt.get("incomeBeforeTax")),
                             self._safe_decimal(stmt.get("incomeTaxExpense")),
@@ -403,7 +403,7 @@ class DataFetcher:
                             self._safe_decimal(stmt.get("accumulatedOtherComprehensiveIncomeLoss")),
                             self._safe_decimal(stmt.get("totalStockholdersEquity")),
                             self._safe_decimal(stmt.get("minorityInterest")),
-                            self._safe_int(stmt.get("commonStock")),
+                            None,  # common_shares_outstanding - FMP balance sheet doesn't provide shares count
                             now,
                             json.dumps(stmt),
                         ),

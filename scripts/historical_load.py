@@ -167,11 +167,12 @@ class HistoricalPriceFetcher:
 
                         fin = self._get_financial_data(symbol, quarter_end, db_conn)
 
-                        market_cap = price * fin["shares_outstanding"] if fin["shares_outstanding"] else None
+                        # Don't calculate market_cap - it overwrites correct API data
+                        # Don't use shares_outstanding - balance sheet has wrong data
                         pe = price / fin["eps"] if fin["eps"] and fin["eps"] > 0 else None
                         pb = price / fin["book_value_per_share"] if fin["book_value_per_share"] and fin["book_value_per_share"] > 0 else None
 
-                        self._save_profile(symbol, quarter_str, price, market_cap, pe, pb, fin["shares_outstanding"], db_conn)
+                        self._save_profile(symbol, quarter_str, price, None, pe, pb, None, db_conn)
 
                     await self.checkpoint.mark_endpoint_completed(symbol, "historical_prices")
                     async with stats_lock:

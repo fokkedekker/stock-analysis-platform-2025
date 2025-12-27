@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from src.analysis.base import BaseAnalyzer, to_float
+from src.analysis.base import BaseAnalyzer, to_float, quarter_to_end_date
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +67,11 @@ class PiotroskiAnalyzer(BaseAnalyzer):
         }
 
         # Get financial data (need 2 years for YoY comparison)
-        income_stmts = self.get_income_statements(symbol, "annual", limit=2)
-        balance_sheets = self.get_balance_sheets(symbol, "annual", limit=2)
-        cash_flows = self.get_cash_flow_statements(symbol, "annual", limit=1)
+        # Filtered by quarter end date for point-in-time analysis
+        as_of = quarter_to_end_date(quarter)
+        income_stmts = self.get_income_statements(symbol, "annual", limit=2, as_of_date=as_of)
+        balance_sheets = self.get_balance_sheets(symbol, "annual", limit=2, as_of_date=as_of)
+        cash_flows = self.get_cash_flow_statements(symbol, "annual", limit=1, as_of_date=as_of)
 
         if not income_stmts or not balance_sheets:
             results["data_quality"] = 0.0

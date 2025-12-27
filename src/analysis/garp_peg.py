@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from src.analysis.base import BaseAnalyzer, to_float
+from src.analysis.base import BaseAnalyzer, to_float, quarter_to_end_date
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +52,10 @@ class GARPPEGAnalyzer(BaseAnalyzer):
             "missing_fields": [],
         }
 
-        # Get financial data
-        income_stmts = self.get_income_statements(symbol, "annual", limit=6)
-        profile = self.get_company_profile(symbol)
+        # Get financial data (filtered by quarter end date for point-in-time analysis)
+        as_of = quarter_to_end_date(quarter)
+        income_stmts = self.get_income_statements(symbol, "annual", limit=6, as_of_date=as_of)
+        profile = self.get_company_profile(symbol, quarter=quarter)
 
         if not income_stmts or not profile:
             results["data_quality"] = 0.0
