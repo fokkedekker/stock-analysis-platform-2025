@@ -14,24 +14,12 @@ import {
   ValuationLens,
   QualityLabel,
   QualityTag,
-  QUALITY_TAGS,
   formatNumber,
   formatPercent,
 } from "@/lib/api"
-import {
-  RiSettings4Line,
-} from "@remixicon/react"
-import {
-  AltmanZScoreInfo,
-  PiotroskiFScoreInfo,
-  GrahamInfo,
-  NetNetInfo,
-  PEGInfo,
-  MagicFormulaInfo,
-  FamaFrenchBMInfo,
-  QualityClassificationInfo,
-  QualityTagsInfo,
-} from "@/components/InfoPopover"
+import { SurvivalGates } from "@/components/strategy/SurvivalGates"
+import { QualityClassification } from "@/components/strategy/QualityClassification"
+import { ValuationLenses, GrahamMode } from "@/components/strategy/ValuationLenses"
 
 const ITEMS_PER_PAGE = 50
 
@@ -177,33 +165,6 @@ function QualityTagsChips({ tags }: { tags: string[] | string | null }) {
   )
 }
 
-// Slider component for min lenses
-function LensSlider({
-  value,
-  max,
-  onChange,
-}: {
-  value: number
-  max: number
-  onChange: (v: number) => void
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      <input
-        type="range"
-        min={0}
-        max={max}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-32 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 accent-indigo-600"
-      />
-      <span className="text-sm font-medium text-gray-700 dark:text-gray-300 w-20">
-        At least {value}
-      </span>
-    </div>
-  )
-}
-
 const RANK_OPTIONS: { value: RankMethod; label: string }[] = [
   { value: "magic-formula", label: "Magic Formula" },
   { value: "earnings-yield", label: "Earnings Yield" },
@@ -241,7 +202,7 @@ export default function PipelinePage() {
   const [lensPeg, setLensPeg] = useState(true)
   const [lensMagicFormula, setLensMagicFormula] = useState(true)
   const [lensFamaFrenchBm, setLensFamaFrenchBm] = useState(true)
-  const [grahamMode, setGrahamMode] = useState<"strict" | "modern" | "garp" | "relaxed">("strict")
+  const [grahamMode, setGrahamMode] = useState<GrahamMode>("strict")
   const [grahamMin, setGrahamMin] = useState(8)
   const [maxPeg, setMaxPeg] = useState(1.5)
   const [mfTopPct, setMfTopPct] = useState(20)
@@ -252,10 +213,6 @@ export default function PipelinePage() {
 
   // Advanced toggle
   const [showAdvanced, setShowAdvanced] = useState(true)
-
-  const activeLensCount = useMemo(() => {
-    return [lensGraham, lensNetNet, lensPeg, lensMagicFormula, lensFamaFrenchBm].filter(Boolean).length
-  }, [lensGraham, lensNetNet, lensPeg, lensMagicFormula, lensFamaFrenchBm])
 
   const fetchData = useCallback(async () => {
     try {
@@ -368,399 +325,56 @@ export default function PipelinePage() {
       </div>
 
       {/* Stage 1: Survival Gates */}
-      <div className="mb-4 p-4 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="w-5 h-5 flex items-center justify-center rounded-full bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 text-xs font-bold">
-            1
-          </span>
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-            Stage 1: Survival Gates
-          </h2>
-          <span className="text-xs text-gray-500">Hard filters - excludes financially distressed companies</span>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Altman */}
-          <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-900">
-            <div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={requireAltman}
-                  onChange={(e) => setRequireAltman(e.target.checked)}
-                  className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                />
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Altman Z-Score
-                </span>
-                <AltmanZScoreInfo />
-              </label>
-              <p className="text-xs text-gray-500 mt-1 ml-6">Exclude bankruptcy risk</p>
-            </div>
-            <select
-              value={altmanZone}
-              onChange={(e) => setAltmanZone(e.target.value as "safe" | "grey")}
-              disabled={!requireAltman}
-              className="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800 disabled:opacity-50"
-            >
-              <option value="safe">Safe zone only</option>
-              <option value="grey">Include grey zone</option>
-            </select>
-          </div>
-          {/* Piotroski */}
-          <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-900">
-            <div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={requirePiotroski}
-                  onChange={(e) => setRequirePiotroski(e.target.checked)}
-                  className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                />
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Piotroski F-Score
-                </span>
-                <PiotroskiFScoreInfo />
-              </label>
-              <p className="text-xs text-gray-500 mt-1 ml-6">Exclude weak financials</p>
-            </div>
-            <select
-              value={piotroskiMin}
-              onChange={(e) => setPiotroskiMin(Number(e.target.value))}
-              disabled={!requirePiotroski}
-              className="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800 disabled:opacity-50"
-            >
-              {[3, 4, 5, 6, 7, 8].map((n) => (
-                <option key={n} value={n}>
-                  Min {n}/9
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </div>
+      <SurvivalGates
+        requireAltman={requireAltman}
+        setRequireAltman={setRequireAltman}
+        altmanZone={altmanZone}
+        setAltmanZone={setAltmanZone}
+        requirePiotroski={requirePiotroski}
+        setRequirePiotroski={setRequirePiotroski}
+        piotroskiMin={piotroskiMin}
+        setPiotroskiMin={setPiotroskiMin}
+      />
 
       {/* Stage 2: Quality Classification */}
-      <div className="mb-4 p-4 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <span className="w-5 h-5 flex items-center justify-center rounded-full bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300 text-xs font-bold">
-              2
-            </span>
-            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-              Stage 2: Quality Classification
-            </h2>
-            <QualityClassificationInfo />
-            <span className="text-xs text-gray-500">Labels based on ROIC</span>
-          </div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={qualityFilter}
-              onChange={(e) => setQualityFilter(e.target.checked)}
-              className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-            />
-            <span className="text-sm text-gray-600 dark:text-gray-400">Filter by quality</span>
-          </label>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300">
-              Compounder
-            </span>
-            <span className="text-xs text-gray-500">ROIC 15%+ with FCF</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">
-              Average
-            </span>
-            <span className="text-xs text-gray-500">ROIC 8-15%</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
-              Weak
-            </span>
-            <span className="text-xs text-gray-500">ROIC &lt;8%</span>
-          </div>
-          {qualityFilter && (
-            <select
-              value={minQuality}
-              onChange={(e) => setMinQuality(e.target.value as QualityLabel)}
-              className="ml-4 text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-            >
-              <option value="compounder">Compounders only</option>
-              <option value="average">Average or better</option>
-              <option value="weak">All</option>
-            </select>
-          )}
-        </div>
-
-        {/* Tag Filter */}
-        <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 inline-flex items-center gap-1">
-              Filter by Tags
-              <QualityTagsInfo />
-            </span>
-            {selectedTags.size > 0 && (
-              <button
-                onClick={() => setSelectedTags(new Set())}
-                className="text-xs text-indigo-600 hover:text-indigo-500"
-              >
-                Clear all
-              </button>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {QUALITY_TAGS.map((tag) => {
-              const isSelected = selectedTags.has(tag)
-              const tagColors: Record<string, string> = {
-                "Durable Compounder": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700",
-                "Cash Machine": "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 border-blue-300 dark:border-blue-700",
-                "Deep Value": "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 border-purple-300 dark:border-purple-700",
-                "Heavy Reinvestor": "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 border-amber-300 dark:border-amber-700",
-                "Volatile Returns": "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 border-red-300 dark:border-red-700",
-                "Earnings Quality Concern": "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300 border-orange-300 dark:border-orange-700",
-                "Premium Priced": "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 border-gray-300 dark:border-gray-600",
-                "Weak Moat Signal": "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300 border-yellow-300 dark:border-yellow-700",
-              }
-              return (
-                <button
-                  key={tag}
-                  onClick={() => {
-                    const next = new Set(selectedTags)
-                    if (next.has(tag)) next.delete(tag)
-                    else next.add(tag)
-                    setSelectedTags(next)
-                  }}
-                  className={`px-2 py-1 rounded-full text-xs font-medium border-2 transition-all ${
-                    isSelected
-                      ? tagColors[tag]
-                      : "bg-gray-50 text-gray-500 border-gray-200 dark:bg-gray-900 dark:text-gray-500 dark:border-gray-700 hover:border-gray-300"
-                  }`}
-                >
-                  {tag}
-                </button>
-              )
-            })}
-          </div>
-          {selectedTags.size > 0 && (
-            <p className="mt-2 text-xs text-gray-500">
-              Showing stocks with selected tags only, excluding stocks with unselected tags ({selectedTags.size} selected)
-            </p>
-          )}
-        </div>
-      </div>
+      <QualityClassification
+        qualityFilter={qualityFilter}
+        setQualityFilter={setQualityFilter}
+        minQuality={minQuality}
+        setMinQuality={setMinQuality}
+        selectedTags={selectedTags}
+        setSelectedTags={setSelectedTags}
+      />
 
       {/* Stage 3: Valuation Lenses */}
-      <div className="mb-4 p-4 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="w-5 h-5 flex items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 text-xs font-bold">
-            3
-          </span>
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-            Stage 3: Valuation Lenses
-          </h2>
-          <span className="text-xs text-gray-500">Independent buy signals - "at least N must pass"</span>
-        </div>
-
-        {/* Slider */}
-        <div className="mb-4 flex items-center gap-4">
-          <LensSlider value={minLenses} max={activeLensCount} onChange={setMinLenses} />
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={strictMode}
-              onChange={(e) => setStrictMode(e.target.checked)}
-              className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-            />
-            <span className="text-sm text-gray-600 dark:text-gray-400">
-              Strict mode (must pass ALL selected)
-            </span>
-          </label>
-        </div>
-
-        {/* Lens toggles */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          {/* Graham */}
-          <div
-            className={`p-3 rounded-lg border-2 transition-colors ${
-              lensGraham
-                ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
-                : "border-gray-200 dark:border-gray-700"
-            }`}
-          >
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={lensGraham}
-                onChange={(e) => setLensGraham(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Graham</span>
-              <GrahamInfo />
-            </label>
-            {lensGraham && showAdvanced && (
-              <div className="mt-2 space-y-1">
-                <select
-                  value={grahamMode}
-                  onChange={(e) => setGrahamMode(e.target.value as typeof grahamMode)}
-                  className="w-full text-xs rounded border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                >
-                  <option value="strict">Strict</option>
-                  <option value="modern">Modern</option>
-                  <option value="garp">GARP</option>
-                  <option value="relaxed">Relaxed</option>
-                </select>
-                <select
-                  value={grahamMin}
-                  onChange={(e) => setGrahamMin(Number(e.target.value))}
-                  className="w-full text-xs rounded border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                >
-                  {[3, 4, 5, 6, 7, 8].map((n) => (
-                    <option key={n} value={n}>
-                      Min {n}/8
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-
-          {/* Net-Net */}
-          <div
-            className={`p-3 rounded-lg border-2 transition-colors ${
-              lensNetNet
-                ? "border-purple-500 bg-purple-50 dark:bg-purple-950"
-                : "border-gray-200 dark:border-gray-700"
-            }`}
-          >
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={lensNetNet}
-                onChange={(e) => setLensNetNet(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-              />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Net-Net</span>
-              <NetNetInfo />
-            </label>
-            <p className="text-xs text-gray-500 mt-1">Below NCAV</p>
-          </div>
-
-          {/* PEG */}
-          <div
-            className={`p-3 rounded-lg border-2 transition-colors ${
-              lensPeg
-                ? "border-teal-500 bg-teal-50 dark:bg-teal-950"
-                : "border-gray-200 dark:border-gray-700"
-            }`}
-          >
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={lensPeg}
-                onChange={(e) => setLensPeg(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500"
-              />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">PEG</span>
-              <PEGInfo />
-            </label>
-            {lensPeg && showAdvanced && (
-              <div className="mt-2">
-                <label className="text-xs text-gray-500">Max PEG</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={maxPeg}
-                  onChange={(e) => setMaxPeg(Number(e.target.value))}
-                  className="w-full text-xs rounded border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                />
-              </div>
-            )}
-          </div>
-
-          {/* Magic Formula */}
-          <div
-            className={`p-3 rounded-lg border-2 transition-colors ${
-              lensMagicFormula
-                ? "border-orange-500 bg-orange-50 dark:bg-orange-950"
-                : "border-gray-200 dark:border-gray-700"
-            }`}
-          >
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={lensMagicFormula}
-                onChange={(e) => setLensMagicFormula(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
-              />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Magic Formula</span>
-              <MagicFormulaInfo />
-            </label>
-            {lensMagicFormula && showAdvanced && (
-              <div className="mt-2">
-                <label className="text-xs text-gray-500">Top %</label>
-                <select
-                  value={mfTopPct}
-                  onChange={(e) => setMfTopPct(Number(e.target.value))}
-                  className="w-full text-xs rounded border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                >
-                  {[10, 20, 30, 50].map((n) => (
-                    <option key={n} value={n}>
-                      Top {n}%
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-
-          {/* Fama-French B/M */}
-          <div
-            className={`p-3 rounded-lg border-2 transition-colors ${
-              lensFamaFrenchBm
-                ? "border-pink-500 bg-pink-50 dark:bg-pink-950"
-                : "border-gray-200 dark:border-gray-700"
-            }`}
-          >
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={lensFamaFrenchBm}
-                onChange={(e) => setLensFamaFrenchBm(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-pink-600 focus:ring-pink-500"
-              />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">FF B/M</span>
-              <FamaFrenchBMInfo />
-            </label>
-            {lensFamaFrenchBm && showAdvanced && (
-              <div className="mt-2">
-                <label className="text-xs text-gray-500">Top %</label>
-                <select
-                  value={ffBmTopPct}
-                  onChange={(e) => setFfBmTopPct(Number(e.target.value))}
-                  className="w-full text-xs rounded border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                >
-                  {[20, 30, 40, 50].map((n) => (
-                    <option key={n} value={n}>
-                      Top {n}%
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Advanced toggle */}
-        <button
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="mt-3 flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-500"
-        >
-          <RiSettings4Line className="w-4 h-4" />
-          {showAdvanced ? "Hide" : "Show"} lens thresholds
-        </button>
-      </div>
+      <ValuationLenses
+        minLenses={minLenses}
+        setMinLenses={setMinLenses}
+        strictMode={strictMode}
+        setStrictMode={setStrictMode}
+        lensGraham={lensGraham}
+        setLensGraham={setLensGraham}
+        lensNetNet={lensNetNet}
+        setLensNetNet={setLensNetNet}
+        lensPeg={lensPeg}
+        setLensPeg={setLensPeg}
+        lensMagicFormula={lensMagicFormula}
+        setLensMagicFormula={setLensMagicFormula}
+        lensFamaFrenchBm={lensFamaFrenchBm}
+        setLensFamaFrenchBm={setLensFamaFrenchBm}
+        grahamMode={grahamMode}
+        setGrahamMode={setGrahamMode}
+        grahamMin={grahamMin}
+        setGrahamMin={setGrahamMin}
+        maxPeg={maxPeg}
+        setMaxPeg={setMaxPeg}
+        mfTopPct={mfTopPct}
+        setMfTopPct={setMfTopPct}
+        ffBmTopPct={ffBmTopPct}
+        setFfBmTopPct={setFfBmTopPct}
+        showAdvanced={showAdvanced}
+        setShowAdvanced={setShowAdvanced}
+      />
 
       {/* Ranking */}
       <div className="mb-6 flex items-center gap-4">

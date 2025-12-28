@@ -12,39 +12,34 @@ import {
   getDividends,
   formatNumber,
   formatCurrency,
-  formatPercent,
   StockAnalysis,
   StockProfile,
 } from "@/lib/api"
 import {
+  getAltmanNarrative,
+  getPiotroskiNarrative,
+  getSurvivalSummary,
+  getROICNarrative,
+  getFCFNarrative,
+  getQualityTagNarrative,
+  getQualitySummary,
+  getGrahamNarrative,
+  getNetNetNarrative,
+  getPEGNarrative,
+  getMagicFormulaNarrative,
+  getFamaFrenchNarrative,
+  getValuationSummary,
+  getSizeNarrative,
+  getProfitabilityNarrative,
+  getFactorSummary,
+} from "@/lib/stockNarratives"
+import {
   RiArrowLeftLine,
-  RiCheckLine,
-  RiCloseLine,
   RiShieldCheckLine,
   RiSparklingLine,
 } from "@remixicon/react"
 import { StockExplainChat } from "@/components/StockExplainChat"
 import { Button } from "@/components/Button"
-
-function PassBadge({ pass, label }: { pass: boolean | null | undefined; label?: string }) {
-  if (pass === true) {
-    return (
-      <div className="flex items-center gap-1 text-green-600">
-        <RiCheckLine className="w-4 h-4" />
-        {label && <span className="text-sm font-medium">{label}</span>}
-      </div>
-    )
-  }
-  if (pass === false) {
-    return (
-      <div className="flex items-center gap-1 text-red-500">
-        <RiCloseLine className="w-4 h-4" />
-        {label && <span className="text-sm font-medium">{label}</span>}
-      </div>
-    )
-  }
-  return <span className="text-gray-400 text-sm">N/A</span>
-}
 
 function StageCard({
   title,
@@ -221,28 +216,12 @@ export default function StockDetailPage() {
           icon={<RiShieldCheckLine className="w-5 h-5 text-green-600" />}
           status={survivalPass ? "pass" : survivalPass === false ? "fail" : "neutral"}
         >
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Altman Z-Score</span>
-                <PassBadge pass={altmanPass} />
-              </div>
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                {altman ? formatNumber(altman.z_score, 2) : "N/A"}
-              </div>
-              <div className="text-xs text-gray-500">
-                Zone: {altman?.zone || "N/A"}
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Piotroski F-Score</span>
-                <PassBadge pass={piotroskiPass} />
-              </div>
-              <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-                {piotroski ? `${piotroski.f_score}/9` : "N/A"}
-              </div>
-            </div>
+          <div className="space-y-4 text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+            <p>{getAltmanNarrative(altman?.z_score, altman?.zone, symbol)}</p>
+            <p>{getPiotroskiNarrative(piotroski?.f_score, symbol)}</p>
+            <p className="font-medium text-gray-900 dark:text-gray-100 pt-2 border-t border-gray-200 dark:border-gray-700">
+              {getSurvivalSummary(altmanPass, piotroskiPass, symbol)}
+            </p>
           </div>
         </StageCard>
 
@@ -264,100 +243,12 @@ export default function StockDetailPage() {
           }
           status={qualityLabel === "Compounder" ? "pass" : qualityLabel === "Average" ? "neutral" : "fail"}
         >
-          <div className="flex items-center gap-4 mb-3">
-            <span
-              className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-                qualityLabel === "Compounder"
-                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
-                  : qualityLabel === "Average"
-                  ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"
-                  : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
-              }`}
-            >
-              {qualityLabel}
-            </span>
-          </div>
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <div className="text-xs text-gray-500 mb-1">ROIC</div>
-              <div className="text-lg font-bold text-gray-900 dark:text-gray-100">
-                {roic ? formatPercent(roic.roic) : "N/A"}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Free Cash Flow</div>
-              <div className="text-lg font-bold text-gray-900 dark:text-gray-100">
-                {roic?.free_cash_flow != null ? formatCurrency(roic.free_cash_flow) : "N/A"}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">FCF 5yr+</div>
-              <div className="text-lg font-bold text-gray-900 dark:text-gray-100">
-                {roic?.fcf_positive_5yr ? "Yes" : "No"}
-              </div>
-            </div>
-          </div>
+          <div className="space-y-4 text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+            <p>{getROICNarrative(roic?.roic, symbol)}</p>
+            <p>{getFCFNarrative(roic?.free_cash_flow, roic?.fcf_positive_5yr, symbol)}</p>
 
-          {/* Advanced Quality Metrics */}
-          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Quality Analysis</h4>
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-500">ROIC Stability</span>
-                <span className={`font-medium ${
-                  roic?.roic_stability_tag === "stable" ? "text-emerald-600 dark:text-emerald-400" :
-                  roic?.roic_stability_tag === "volatile" ? "text-red-600 dark:text-red-400" :
-                  "text-gray-700 dark:text-gray-300"
-                }`}>
-                  {roic?.roic_stability_tag || "N/A"}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Margin Stability</span>
-                <span className={`font-medium ${
-                  roic?.gross_margin_stability_tag === "stable" ? "text-emerald-600 dark:text-emerald-400" :
-                  roic?.gross_margin_stability_tag === "volatile" ? "text-red-600 dark:text-red-400" :
-                  "text-gray-700 dark:text-gray-300"
-                }`}>
-                  {roic?.gross_margin_stability_tag || "N/A"}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">FCF Yield</span>
-                <span className="font-medium text-gray-700 dark:text-gray-300">
-                  {roic?.fcf_yield != null ? formatPercent(roic.fcf_yield) : "N/A"}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">EV/EBIT</span>
-                <span className="font-medium text-gray-700 dark:text-gray-300">
-                  {roic?.ev_to_ebit != null ? `${roic.ev_to_ebit.toFixed(1)}x` : "N/A"}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Reinvestment</span>
-                <span className={`font-medium ${
-                  roic?.reinvestment_tag === "aggressive" ? "text-amber-600 dark:text-amber-400" :
-                  "text-gray-700 dark:text-gray-300"
-                }`}>
-                  {roic?.reinvestment_tag || "N/A"}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Earnings Quality</span>
-                <span className={`font-medium ${
-                  roic?.earnings_quality_tag === "strong" ? "text-emerald-600 dark:text-emerald-400" :
-                  roic?.earnings_quality_tag === "poor" ? "text-red-600 dark:text-red-400" :
-                  "text-gray-700 dark:text-gray-300"
-                }`}>
-                  {roic?.earnings_quality_tag || "N/A"}
-                </span>
-              </div>
-            </div>
-
-            {/* Quality Tags */}
+            {/* Quality Tags with Narratives */}
             {(() => {
-              // Parse quality_tags (may be JSON string or array)
               let parsedTags: string[] = []
               if (roic?.quality_tags) {
                 if (typeof roic.quality_tags === "string") {
@@ -385,18 +276,24 @@ export default function StockDetailPage() {
               }
 
               return (
-                <div className="mt-3 flex flex-wrap gap-1">
+                <div className="space-y-3 pt-2 border-t border-gray-200 dark:border-gray-700">
                   {parsedTags.map((tag: string) => (
-                    <span
-                      key={tag}
-                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${tagColors[tag] || "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"}`}
-                    >
-                      {tag}
-                    </span>
+                    <div key={tag}>
+                      <span
+                        className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium mb-1 ${tagColors[tag] || "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"}`}
+                      >
+                        {tag}
+                      </span>
+                      <p className="text-gray-600 dark:text-gray-400">{getQualityTagNarrative(tag)}</p>
+                    </div>
                   ))}
                 </div>
               )
             })()}
+
+            <p className="font-medium text-gray-900 dark:text-gray-100 pt-2 border-t border-gray-200 dark:border-gray-700">
+              {getQualitySummary(qualityLabel, symbol)}
+            </p>
           </div>
         </StageCard>
 
@@ -410,84 +307,25 @@ export default function StockDetailPage() {
           }
           status={lensesPassed.length >= 2 ? "pass" : lensesPassed.length >= 1 ? "neutral" : "fail"}
         >
-          <div className="flex flex-wrap gap-2 mb-4">
-            {grahamPass && (
-              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
-                Graham
-              </span>
-            )}
-            {netNetPass && (
-              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">
-                Net-Net
-              </span>
-            )}
-            {pegPass && (
-              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300">
-                PEG
-              </span>
-            )}
-            {mfPass && (
-              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300">
-                Magic Formula
-              </span>
-            )}
-            {ffBmPass && (
-              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-pink-100 text-pink-700 dark:bg-pink-900 dark:text-pink-300">
-                FF B/M
-              </span>
-            )}
-            {lensesPassed.length === 0 && (
-              <span className="text-gray-400 text-sm">No valuation lenses passed</span>
-            )}
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-500">Graham</span>
-                <PassBadge pass={grahamPass} />
-              </div>
-              <div className="text-gray-900 dark:text-gray-100">
-                {graham ? `${graham.criteria_passed}/8` : "N/A"}
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-500">Net-Net</span>
-                <PassBadge pass={netNetPass} />
-              </div>
-              <div className="text-gray-900 dark:text-gray-100">
-                {netNet ? formatPercent(netNet.discount_to_ncav) : "N/A"}
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-500">PEG</span>
-                <PassBadge pass={pegPass} />
-              </div>
-              <div className="text-gray-900 dark:text-gray-100">
-                {peg ? formatNumber(peg.peg_ratio, 2) : "N/A"}
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-500">MF Rank</span>
-                <PassBadge pass={mfPass} />
-              </div>
-              <div className="text-gray-900 dark:text-gray-100">
-                {magicFormula ? `#${magicFormula.combined_rank}` : "N/A"}
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-500">FF B/M</span>
-                <PassBadge pass={ffBmPass} />
-              </div>
-              <div className="text-gray-900 dark:text-gray-100">
-                {famaFrench?.book_to_market_percentile
-                  ? `${(famaFrench.book_to_market_percentile * 100).toFixed(0)}%ile`
-                  : "N/A"}
-              </div>
-            </div>
+          <div className="space-y-4 text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+            <p>{getGrahamNarrative(graham?.criteria_passed, symbol)}</p>
+            <p>{getNetNetNarrative(netNet?.discount_to_ncav, netNet?.trading_below_ncav, symbol)}</p>
+            <p>{getPEGNarrative(peg?.peg_ratio, peg?.peg_pass, symbol)}</p>
+            <p>{getMagicFormulaNarrative(magicFormula?.combined_rank, symbol)}</p>
+            <p>{getFamaFrenchNarrative(famaFrench?.book_to_market_percentile, symbol)}</p>
+
+            <p className="font-medium text-gray-900 dark:text-gray-100 pt-2 border-t border-gray-200 dark:border-gray-700">
+              {getValuationSummary(
+                lensesPassed.length,
+                [
+                  grahamPass && "Graham",
+                  netNetPass && "Net-Net",
+                  pegPass && "PEG",
+                  mfPass && "Magic Formula",
+                  ffBmPass && "Fama-French",
+                ].filter(Boolean) as string[]
+              )}
+            </p>
           </div>
         </StageCard>
 
@@ -501,44 +339,18 @@ export default function StockDetailPage() {
           }
           status="neutral"
         >
-          <p className="text-xs text-gray-500 mb-3">Context for portfolio construction (never used as a filter)</p>
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Size</div>
-              <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                {profile?.market_cap
-                  ? profile.market_cap >= 10e9
-                    ? "Large-Cap"
-                    : profile.market_cap >= 2e9
-                    ? "Mid-Cap"
-                    : "Small-Cap"
-                  : "N/A"}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Value (B/M)</div>
-              <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                {famaFrench?.book_to_market_percentile
-                  ? famaFrench.book_to_market_percentile >= 0.7
-                    ? "Value"
-                    : famaFrench.book_to_market_percentile <= 0.3
-                    ? "Growth"
-                    : "Neutral"
-                  : "N/A"}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Profitability</div>
-              <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                {famaFrench?.profitability_percentile
-                  ? famaFrench.profitability_percentile >= 0.7
-                    ? "High"
-                    : famaFrench.profitability_percentile <= 0.3
-                    ? "Low"
-                    : "Medium"
-                  : "N/A"}
-              </div>
-            </div>
+          <div className="space-y-4 text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+            <p className="text-xs text-gray-500 italic">Factor exposure helps with portfolio construction - understanding how different stocks complement each other based on academic risk factors.</p>
+            <p>{getSizeNarrative(profile?.market_cap, symbol)}</p>
+            <p>{getProfitabilityNarrative(famaFrench?.profitability_percentile, symbol)}</p>
+            <p className="font-medium text-gray-900 dark:text-gray-100 pt-2 border-t border-gray-200 dark:border-gray-700">
+              {getFactorSummary(
+                profile?.market_cap,
+                famaFrench?.book_to_market_percentile,
+                famaFrench?.profitability_percentile,
+                symbol
+              )}
+            </p>
           </div>
         </StageCard>
       </div>

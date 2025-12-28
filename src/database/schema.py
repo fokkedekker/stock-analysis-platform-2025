@@ -516,6 +516,40 @@ CREATE TABLE IF NOT EXISTS fetch_log (
 -- Note: fetch_log has no primary key as it's an append-only log table
 """
 
+# SPY benchmark prices table
+SPY_PRICES_TABLE = """
+CREATE TABLE IF NOT EXISTS spy_prices (
+    quarter VARCHAR PRIMARY KEY,
+    price DECIMAL NOT NULL,
+    price_date DATE,
+    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+# Grid search results table
+GRID_SEARCHES_TABLE = """
+CREATE TABLE IF NOT EXISTS grid_searches (
+    id VARCHAR PRIMARY KEY,
+    name VARCHAR,
+    started_at TIMESTAMP NOT NULL,
+    completed_at TIMESTAMP,
+    status VARCHAR NOT NULL DEFAULT 'running',
+    total_simulations INTEGER,
+    completed_simulations INTEGER,
+    duration_seconds DECIMAL,
+    -- Request configuration (JSON)
+    request_config JSON,
+    -- Results summary
+    best_alpha DECIMAL,
+    best_win_rate DECIMAL,
+    -- Full results (JSON array of simulation results)
+    results_json JSON,
+    -- Top results for quick display
+    best_by_alpha_json JSON,
+    best_by_win_rate_json JSON
+)
+"""
+
 ALL_TABLES = [
     ("tickers", TICKERS_TABLE),
     ("company_profiles", COMPANY_PROFILES_TABLE),
@@ -534,6 +568,8 @@ ALL_TABLES = [
     ("net_net_results", NET_NET_RESULTS_TABLE),
     ("stock_rankings", STOCK_RANKINGS_TABLE),
     ("fetch_log", FETCH_LOG_TABLE),
+    ("spy_prices", SPY_PRICES_TABLE),
+    ("grid_searches", GRID_SEARCHES_TABLE),
 ]
 
 # Performance indexes for analysis queries

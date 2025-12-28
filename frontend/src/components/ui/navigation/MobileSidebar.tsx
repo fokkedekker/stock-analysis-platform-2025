@@ -13,6 +13,7 @@ import { StockSearch } from "@/components/StockSearch"
 import { cx, focusRing } from "@/lib/utils"
 import {
   RiBarChartBoxLine,
+  RiFlaskLine,
   RiHome2Line,
   RiLineChartLine,
   RiMenuLine,
@@ -27,7 +28,8 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 
 const navigation = [
-  { name: "Rankings", href: siteConfig.baseLinks.home, icon: RiHome2Line },
+  { name: "Pipeline", href: siteConfig.baseLinks.home, icon: RiHome2Line },
+  { name: "Grid Search", href: siteConfig.baseLinks.gridSearch, icon: RiFlaskLine },
 ] as const
 
 const screeners = [

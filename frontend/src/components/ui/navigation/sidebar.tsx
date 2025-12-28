@@ -6,6 +6,7 @@ import { cx, focusRing } from "@/lib/utils"
 import {
   RiBarChartBoxLine,
   RiFilter3Line,
+  RiFlaskLine,
   RiLineChartLine,
   RiMoonLine,
   RiPercentLine,
@@ -24,6 +25,7 @@ import MobileSidebar from "./MobileSidebar"
 
 const navigation = [
   { name: "Pipeline", href: siteConfig.baseLinks.home, icon: RiFilter3Line },
+  { name: "Simulations", href: siteConfig.baseLinks.gridSearch, icon: RiFlaskLine },
 ] as const
 
 // Grouped by pipeline stage
