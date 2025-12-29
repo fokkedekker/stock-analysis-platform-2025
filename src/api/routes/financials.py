@@ -3,6 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from src.database.connection import get_db_manager
+from src.scrapers.fmp_client import FMPClient
 
 router = APIRouter()
 
@@ -131,3 +132,25 @@ async def get_dividends(
         dividends = [dict(zip(columns, row)) for row in result]
 
     return {"symbol": symbol, "dividends": dividends}
+
+
+@router.get("/{symbol}/historical-prices")
+async def get_historical_prices(
+    symbol: str,
+    from_date: str | None = Query(None, alias="from", description="Start date YYYY-MM-DD"),
+    to_date: str | None = Query(None, alias="to", description="End date YYYY-MM-DD"),
+):
+    """Get historical daily prices for a symbol from FMP API.
+
+    Returns daily OHLCV data sorted by date ascending (oldest first).
+    """
+    async with FMPClient() as client:
+        prices = await client.get_historical_prices(symbol, from_date, to_date)
+
+    if not prices:
+        raise HTTPException(status_code=404, detail=f"No historical prices found for {symbol}")
+
+    # Sort by date ascending (oldest first) for charting
+    prices_sorted = sorted(prices, key=lambda x: x.get("date", ""))
+
+    return {"symbol": symbol.upper(), "prices": prices_sorted}

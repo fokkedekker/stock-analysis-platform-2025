@@ -566,3 +566,70 @@ export async function simulateBuy(request: BacktestRequest): Promise<BacktestRes
   }
   return response.json();
 }
+
+// Historical Prices
+export interface HistoricalPrice {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  adjClose: number;
+  volume: number;
+}
+
+export interface HistoricalPricesResponse {
+  symbol: string;
+  prices: HistoricalPrice[];
+}
+
+export async function getHistoricalPrices(
+  symbol: string,
+  from?: string,
+  to?: string
+): Promise<HistoricalPricesResponse> {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+
+  const url = `${API_BASE}/financials/${symbol}/historical-prices?${params.toString()}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to fetch historical prices');
+  return res.json();
+}
+
+// Strategy Signals
+export interface StrategySignal {
+  buy_quarter: string;
+  buy_date: string;
+  sell_quarter: string;
+  sell_date: string;
+  buy_price: number | null;
+  sell_price: number | null;
+  stock_return: number | null;
+  spy_return: number | null;
+  alpha: number | null;
+  matched: boolean;
+}
+
+export interface StrategySignalsResponse {
+  symbol: string;
+  strategy_id: string;
+  strategy_name: string;
+  holding_period: number;
+  signals: StrategySignal[];
+  total_return: number | null;
+  total_alpha: number | null;
+  avg_alpha_per_trade: number | null;
+  num_trades: number;
+  win_rate: number | null;
+}
+
+export async function getStrategySignals(
+  strategyId: string,
+  symbol: string
+): Promise<StrategySignalsResponse> {
+  const res = await fetch(`${API_BASE}/strategies/${strategyId}/signals/${symbol}`);
+  if (!res.ok) throw new Error('Failed to fetch strategy signals');
+  return res.json();
+}

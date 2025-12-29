@@ -10,11 +10,17 @@ import {
   getBalanceSheets,
   getCashFlows,
   getDividends,
+  getHistoricalPrices,
+  getStrategySignals,
   formatNumber,
   formatCurrency,
   StockAnalysis,
   StockProfile,
+  HistoricalPrice,
+  StrategySignalsResponse,
 } from "@/lib/api"
+import { loadStrategies, SavedStrategy } from "@/lib/saved-strategies"
+import StockPriceChart from "@/components/StockPriceChart"
 import {
   getAltmanNarrative,
   getPiotroskiNarrative,
@@ -93,6 +99,13 @@ export default function StockDetailPage() {
   const [activeTab, setActiveTab] = useState<"income" | "balance" | "cashflow" | "dividends">("income")
   const [showExplain, setShowExplain] = useState(false)
 
+  // Strategy chart state
+  const [strategies, setStrategies] = useState<SavedStrategy[]>([])
+  const [selectedStrategyId, setSelectedStrategyId] = useState<string>("")
+  const [historicalPrices, setHistoricalPrices] = useState<HistoricalPrice[]>([])
+  const [strategySignals, setStrategySignals] = useState<StrategySignalsResponse | null>(null)
+  const [chartLoading, setChartLoading] = useState(false)
+
   useEffect(() => {
     async function fetchData() {
       try {
@@ -121,6 +134,52 @@ export default function StockDetailPage() {
     }
     fetchData()
   }, [symbol])
+
+  // Load saved strategies and historical prices
+  useEffect(() => {
+    async function loadChartData() {
+      try {
+        // Load strategies
+        const savedStrategies = await loadStrategies()
+        setStrategies(savedStrategies)
+
+        // Load historical prices (5 years)
+        const fiveYearsAgo = new Date()
+        fiveYearsAgo.setFullYear(fiveYearsAgo.getFullYear() - 5)
+        const fromDate = fiveYearsAgo.toISOString().split("T")[0]
+
+        const priceData = await getHistoricalPrices(symbol, fromDate).catch(() => null)
+        if (priceData) {
+          setHistoricalPrices(priceData.prices)
+        }
+      } catch (err) {
+        console.error("Failed to load chart data:", err)
+      }
+    }
+    loadChartData()
+  }, [symbol])
+
+  // Load strategy signals when a strategy is selected
+  useEffect(() => {
+    async function loadSignals() {
+      if (!selectedStrategyId) {
+        setStrategySignals(null)
+        return
+      }
+
+      setChartLoading(true)
+      try {
+        const signals = await getStrategySignals(selectedStrategyId, symbol)
+        setStrategySignals(signals)
+      } catch (err) {
+        console.error("Failed to load strategy signals:", err)
+        setStrategySignals(null)
+      } finally {
+        setChartLoading(false)
+      }
+    }
+    loadSignals()
+  }, [selectedStrategyId, symbol])
 
   if (loading) {
     return (
@@ -207,6 +266,122 @@ export default function StockDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Stock Price Chart with Strategy Signals */}
+      {historicalPrices.length > 0 && (
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-50">
+              Price History
+            </h2>
+            <div className="flex items-center gap-4">
+              <label className="text-sm text-gray-600 dark:text-gray-400">
+                Apply Strategy:
+              </label>
+              <select
+                value={selectedStrategyId}
+                onChange={(e) => setSelectedStrategyId(e.target.value)}
+                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+              >
+                <option value="">No strategy selected</option>
+                {strategies.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.holding_period || 1}Q hold)
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            {/* Chart */}
+            <div className="lg:col-span-3 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+              <StockPriceChart
+                prices={historicalPrices}
+                signals={strategySignals?.signals || []}
+                loading={chartLoading}
+              />
+            </div>
+
+            {/* Strategy Performance Summary */}
+            <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                Strategy Performance
+              </h3>
+              {strategySignals ? (
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Strategy</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                      {strategySignals.strategy_name}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Holding Period</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                      {strategySignals.holding_period} quarter{strategySignals.holding_period !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                  <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Number of Trades</p>
+                    <p className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                      {strategySignals.num_trades}
+                    </p>
+                  </div>
+                  {strategySignals.total_return !== null && (
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Total Return</p>
+                      <p className={`text-lg font-bold ${
+                        strategySignals.total_return >= 0
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-red-600 dark:text-red-400"
+                      }`}>
+                        {strategySignals.total_return >= 0 ? "+" : ""}{strategySignals.total_return.toFixed(1)}%
+                      </p>
+                    </div>
+                  )}
+                  {strategySignals.total_alpha !== null && (
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Total Alpha vs S&P 500</p>
+                      <p className={`text-lg font-bold ${
+                        strategySignals.total_alpha >= 0
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-red-600 dark:text-red-400"
+                      }`}>
+                        {strategySignals.total_alpha >= 0 ? "+" : ""}{strategySignals.total_alpha.toFixed(1)}%
+                      </p>
+                    </div>
+                  )}
+                  {strategySignals.avg_alpha_per_trade !== null && (
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Avg Alpha per Trade</p>
+                      <p className={`text-sm font-medium ${
+                        strategySignals.avg_alpha_per_trade >= 0
+                          ? "text-green-600 dark:text-green-400"
+                          : "text-red-600 dark:text-red-400"
+                      }`}>
+                        {strategySignals.avg_alpha_per_trade >= 0 ? "+" : ""}{strategySignals.avg_alpha_per_trade.toFixed(2)}%
+                      </p>
+                    </div>
+                  )}
+                  {strategySignals.win_rate !== null && (
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Win Rate</p>
+                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                        {strategySignals.win_rate.toFixed(0)}%
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Select a strategy to see how it would have performed on this stock
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 4-Stage Pipeline Analysis */}
       <div className="space-y-4 mb-8">

@@ -338,3 +338,499 @@ async def delete_strategy(strategy_id: str) -> dict:
     logger.info(f"Deleted strategy {strategy_id}")
 
     return {"status": "deleted", "id": strategy_id}
+
+
+# ============================================================================
+# Strategy Signals Endpoint
+# ============================================================================
+
+
+class StrategySignal(BaseModel):
+    """A single buy/sell signal."""
+
+    buy_quarter: str
+    buy_date: str
+    sell_quarter: str
+    sell_date: str
+    buy_price: float | None
+    sell_price: float | None
+    stock_return: float | None
+    spy_return: float | None
+    alpha: float | None
+    matched: bool
+
+
+class StrategySignalsResponse(BaseModel):
+    """Response with all signals for a stock."""
+
+    symbol: str
+    strategy_id: str
+    strategy_name: str
+    holding_period: int
+    signals: list[StrategySignal]
+    total_return: float | None
+    total_alpha: float | None
+    avg_alpha_per_trade: float | None
+    num_trades: int
+    win_rate: float | None
+
+
+def _add_quarters(quarter: str, n: int) -> str:
+    """Add n quarters to a quarter string. e.g., '2023Q1' + 2 = '2023Q3'."""
+    year = int(quarter[:4])
+    q = int(quarter[5])
+    total_q = (year * 4 + q - 1) + n
+    new_year = total_q // 4
+    new_q = (total_q % 4) + 1
+    return f"{new_year}Q{new_q}"
+
+
+def _quarter_to_date(quarter: str) -> str:
+    """Convert quarter string to end-of-quarter date."""
+    year = int(quarter[:4])
+    q = int(quarter[5])
+    if q == 1:
+        return f"{year}-03-31"
+    elif q == 2:
+        return f"{year}-06-30"
+    elif q == 3:
+        return f"{year}-09-30"
+    else:
+        return f"{year}-12-31"
+
+
+def _check_stock_matches_strategy(stock_data: dict, settings: PipelineSettings) -> bool:
+    """Check if a stock's analysis data matches the strategy filters."""
+
+    # Stage 1: Survival Gates
+    if settings.altman_enabled:
+        zone = stock_data.get("altman_zone")
+        if settings.altman_zone == "safe" and zone != "safe":
+            return False
+        if settings.altman_zone == "grey" and zone not in ("safe", "grey"):
+            return False
+        # "distress" allows all zones
+
+    if settings.piotroski_enabled:
+        score = stock_data.get("piotroski_score")
+        if score is None or score < settings.piotroski_min:
+            return False
+
+    # Stage 2: Quality
+    if settings.quality_enabled:
+        roic = stock_data.get("roic")
+        fcf_5yr = stock_data.get("fcf_positive_5yr")
+
+        if settings.min_quality == "compounder":
+            if not (roic and roic >= 0.15 and fcf_5yr):
+                return False
+        elif settings.min_quality == "average":
+            if not (roic and roic >= 0.08):
+                return False
+
+        # Check quality tags
+        quality_tags = stock_data.get("quality_tags")
+        if quality_tags and isinstance(quality_tags, str):
+            try:
+                tags_list = json.loads(quality_tags)
+            except json.JSONDecodeError:
+                tags_list = []
+        elif isinstance(quality_tags, list):
+            tags_list = quality_tags
+        else:
+            tags_list = []
+
+        for tag in settings.excluded_tags:
+            if tag in tags_list:
+                return False
+
+        for tag in settings.required_tags:
+            if tag not in tags_list:
+                return False
+
+    # Stage 3: Valuation Lenses
+    lenses_passed = 0
+    lenses_active = 0
+
+    if settings.graham_enabled:
+        lenses_active += 1
+        graham_score = stock_data.get("graham_score")
+        if graham_score and graham_score >= settings.graham_min:
+            lenses_passed += 1
+
+    if settings.net_net_enabled:
+        lenses_active += 1
+        if stock_data.get("trading_below_ncav"):
+            lenses_passed += 1
+
+    if settings.peg_enabled:
+        lenses_active += 1
+        peg = stock_data.get("peg_ratio")
+        if peg and 0 < peg <= settings.max_peg:
+            lenses_passed += 1
+
+    if settings.magic_formula_enabled:
+        lenses_active += 1
+        mf_rank = stock_data.get("magic_formula_rank")
+        # Calculate threshold based on percentage
+        threshold = int(5000 * (settings.mf_top_pct / 100))
+        if mf_rank and mf_rank <= threshold:
+            lenses_passed += 1
+
+    if settings.fama_french_enabled:
+        lenses_active += 1
+        ff_bm = stock_data.get("book_to_market_percentile")
+        threshold = 1.0 - (settings.ff_top_pct / 100)
+        if ff_bm and ff_bm >= threshold:
+            lenses_passed += 1
+
+    if lenses_active > 0:
+        if settings.strict_mode:
+            if lenses_passed != lenses_active:
+                return False
+        else:
+            if lenses_passed < settings.min_lenses:
+                return False
+
+    # Stage 4: Raw Filters
+    for rf in settings.raw_filters:
+        factor = rf.factor
+        operator = rf.operator
+        value = rf.value
+
+        stock_value = stock_data.get(factor)
+        if stock_value is None:
+            return False
+
+        try:
+            stock_value = float(stock_value)
+            filter_value = float(value)
+        except (TypeError, ValueError):
+            if operator == "==":
+                if str(stock_value) != str(value):
+                    return False
+            continue
+
+        if operator == ">=" and stock_value < filter_value:
+            return False
+        elif operator == "<=" and stock_value > filter_value:
+            return False
+        elif operator == ">" and stock_value <= filter_value:
+            return False
+        elif operator == "<" and stock_value >= filter_value:
+            return False
+        elif operator == "==" and stock_value != filter_value:
+            return False
+        elif operator == "!=" and stock_value == filter_value:
+            return False
+
+    return True
+
+
+def _create_signal(
+    buy_quarter: str,
+    sell_quarter: str,
+    stock_prices: dict[str, float],
+    spy_prices: dict[str, float],
+    current_stock_price: float | None = None,
+    current_spy_price: float | None = None,
+) -> StrategySignal:
+    """Create a StrategySignal with calculated returns.
+
+    For open positions (sell_quarter in the future), uses current prices
+    to calculate unrealized returns.
+    """
+    buy_date = _quarter_to_date(buy_quarter)
+    sell_date = _quarter_to_date(sell_quarter)
+
+    buy_price = stock_prices.get(buy_quarter)
+    sell_price = stock_prices.get(sell_quarter)
+
+    # For open positions, use current price for unrealized returns
+    is_open_position = sell_price is None
+    effective_sell_price = sell_price if sell_price else current_stock_price
+
+    # Calculate returns
+    stock_return = None
+    spy_return = None
+    alpha = None
+
+    if buy_price and effective_sell_price and buy_price > 0:
+        stock_return = round(((effective_sell_price - buy_price) / buy_price) * 100, 2)
+
+    spy_buy = spy_prices.get(buy_quarter)
+    spy_sell = spy_prices.get(sell_quarter)
+    # For open positions, use current SPY price
+    effective_spy_sell = spy_sell if spy_sell else current_spy_price
+
+    if spy_buy and effective_spy_sell and spy_buy > 0:
+        spy_return = round(((effective_spy_sell - spy_buy) / spy_buy) * 100, 2)
+
+    if stock_return is not None and spy_return is not None:
+        alpha = round(stock_return - spy_return, 2)
+
+    return StrategySignal(
+        buy_quarter=buy_quarter,
+        buy_date=buy_date,
+        sell_quarter=sell_quarter,
+        sell_date=sell_date,
+        buy_price=buy_price,
+        sell_price=sell_price if not is_open_position else None,  # Keep null for open positions
+        stock_return=stock_return,
+        spy_return=spy_return,
+        alpha=alpha,
+        matched=True,
+    )
+
+
+@router.get("/{strategy_id}/signals/{symbol}", response_model=StrategySignalsResponse)
+async def get_strategy_signals(strategy_id: str, symbol: str) -> StrategySignalsResponse:
+    """
+    Get buy/sell signals for a stock based on a saved strategy.
+
+    Uses a "rolling hold" model:
+    - Buy when stock first matches the strategy
+    - If stock keeps matching in subsequent quarters, extend the sell date
+    - Sell when stock stops matching AND holding period expires
+    - Then look for next buy opportunity
+    """
+    # Load strategy
+    strategy = await get_strategy(strategy_id)
+    holding_period = strategy.holding_period or 1
+    settings = strategy.settings
+
+    db = get_db_manager()
+
+    with db.get_connection() as conn:
+        # Get all available analysis quarters
+        quarters_result = conn.execute(
+            """
+            SELECT DISTINCT analysis_quarter
+            FROM graham_results
+            ORDER BY analysis_quarter
+            """
+        ).fetchall()
+        all_quarters = [row[0] for row in quarters_result]
+
+        # Load SPY prices
+        spy_result = conn.execute("SELECT quarter, price FROM spy_prices").fetchall()
+        spy_prices = {row[0]: float(row[1]) for row in spy_result}
+
+        # Load stock prices from company_profiles
+        prices_result = conn.execute(
+            """
+            SELECT fiscal_quarter, price
+            FROM company_profiles
+            WHERE UPPER(symbol) = UPPER(?)
+            AND price IS NOT NULL AND price > 0
+            """,
+            (symbol,),
+        ).fetchall()
+        stock_prices = {row[0]: float(row[1]) for row in prices_result}
+
+        # Get current/latest stock price (most recent quarter)
+        current_stock_price = None
+        if stock_prices:
+            latest_quarter = max(stock_prices.keys())
+            current_stock_price = stock_prices[latest_quarter]
+
+        # Get current/latest SPY price
+        current_spy_price = None
+        if spy_prices:
+            latest_spy_quarter = max(spy_prices.keys())
+            current_spy_price = spy_prices[latest_spy_quarter]
+
+        # Build signals using rolling hold model
+        signals: list[StrategySignal] = []
+
+        # Track current position
+        in_position = False
+        buy_quarter: str | None = None
+        last_match_quarter: str | None = None
+
+        for quarter in all_quarters:
+            # Get all analysis data for this stock in this quarter
+            stock_data = _query_stock_analysis(conn, symbol, quarter)
+
+            if not stock_data:
+                # No data for this quarter - if in position, check if we should sell
+                if in_position and last_match_quarter:
+                    planned_sell = _add_quarters(last_match_quarter, holding_period)
+                    if quarter >= planned_sell:
+                        # Holding period expired, close position
+                        signals.append(_create_signal(
+                            buy_quarter, planned_sell, stock_prices, spy_prices,
+                            current_stock_price, current_spy_price
+                        ))
+                        in_position = False
+                        buy_quarter = None
+                        last_match_quarter = None
+                continue
+
+            # Check if stock matches strategy
+            matched = _check_stock_matches_strategy(stock_data, settings)
+
+            if matched:
+                if not in_position:
+                    # Open new position
+                    in_position = True
+                    buy_quarter = quarter
+                    last_match_quarter = quarter
+                else:
+                    # Extend position - update last match quarter
+                    last_match_quarter = quarter
+            else:
+                # Stock doesn't match this quarter
+                if in_position and last_match_quarter:
+                    planned_sell = _add_quarters(last_match_quarter, holding_period)
+                    if quarter >= planned_sell:
+                        # Holding period expired, close position
+                        signals.append(_create_signal(
+                            buy_quarter, planned_sell, stock_prices, spy_prices,
+                            current_stock_price, current_spy_price
+                        ))
+                        in_position = False
+                        buy_quarter = None
+                        last_match_quarter = None
+
+        # Handle position still open at end of data
+        if in_position and buy_quarter and last_match_quarter:
+            planned_sell = _add_quarters(last_match_quarter, holding_period)
+            signals.append(_create_signal(
+                buy_quarter, planned_sell, stock_prices, spy_prices,
+                current_stock_price, current_spy_price
+            ))
+
+    # Calculate aggregate stats
+    valid_trades = [s for s in signals if s.stock_return is not None]
+    num_trades = len(valid_trades)
+
+    total_return = None
+    total_alpha = None
+    avg_alpha = None
+    win_rate = None
+
+    if num_trades > 0:
+        # Compound return
+        compound_factor = 1.0
+        for s in valid_trades:
+            compound_factor *= (1 + s.stock_return / 100)
+        total_return = round((compound_factor - 1) * 100, 2)
+
+        # Sum of alpha
+        alphas = [s.alpha for s in valid_trades if s.alpha is not None]
+        if alphas:
+            total_alpha = round(sum(alphas), 2)
+            avg_alpha = round(sum(alphas) / len(alphas), 2)
+            win_rate = round(len([a for a in alphas if a > 0]) / len(alphas) * 100, 1)
+
+    return StrategySignalsResponse(
+        symbol=symbol.upper(),
+        strategy_id=strategy_id,
+        strategy_name=strategy.name,
+        holding_period=holding_period,
+        signals=signals,
+        total_return=total_return,
+        total_alpha=total_alpha,
+        avg_alpha_per_trade=avg_alpha,
+        num_trades=num_trades,
+        win_rate=win_rate,
+    )
+
+
+def _query_stock_analysis(conn: Any, symbol: str, quarter: str) -> dict | None:
+    """Query all analysis data for a stock in a given quarter."""
+    result = conn.execute(
+        """
+        SELECT
+            -- Altman
+            a.z_score as altman_z_score,
+            a.zone as altman_zone,
+            -- Piotroski
+            p.f_score as piotroski_score,
+            -- ROIC Quality
+            r.roic,
+            r.fcf_positive_5yr,
+            r.quality_tags,
+            r.reinvestment_rate,
+            r.roic_std_dev,
+            r.gross_margin_std_dev,
+            r.fcf_to_net_income,
+            r.fcf_yield,
+            r.ev_to_ebit,
+            r.debt_to_equity as roic_debt_to_equity,
+            r.free_cash_flow,
+            -- Graham
+            g.criteria_passed as graham_score,
+            -- Net-Net
+            nn.trading_below_ncav,
+            nn.discount_to_ncav as net_net_discount,
+            -- PEG
+            gp.peg_ratio,
+            gp.eps_growth_1yr,
+            gp.eps_growth_3yr,
+            gp.eps_growth_5yr,
+            -- Magic Formula
+            mf.combined_rank as magic_formula_rank,
+            mf.earnings_yield,
+            mf.return_on_capital as mf_roic,
+            -- Fama-French
+            ff.book_to_market_percentile,
+            ff.profitability_percentile,
+            -- Key metrics (get latest up to quarter end)
+            km.pe_ratio,
+            km.pb_ratio,
+            km.price_to_sales,
+            km.roe,
+            km.roa,
+            km.gross_profit_margin,
+            km.operating_profit_margin,
+            km.net_profit_margin,
+            km.current_ratio,
+            km.quick_ratio,
+            km.debt_ratio,
+            km.debt_to_equity,
+            km.debt_to_assets,
+            km.interest_coverage,
+            km.dividend_yield,
+            km.price_to_free_cash_flow,
+            km.ev_to_sales,
+            km.ev_to_ebitda,
+            km.net_debt_to_ebitda,
+            km.payout_ratio
+        FROM (SELECT 1) dummy
+        LEFT JOIN altman_results a ON UPPER(a.symbol) = UPPER(?) AND a.analysis_quarter = ?
+        LEFT JOIN piotroski_results p ON UPPER(p.symbol) = UPPER(?) AND p.analysis_quarter = ?
+        LEFT JOIN roic_quality_results r ON UPPER(r.symbol) = UPPER(?) AND r.analysis_quarter = ?
+        LEFT JOIN graham_results g ON UPPER(g.symbol) = UPPER(?) AND g.analysis_quarter = ? AND g.mode = 'strict'
+        LEFT JOIN net_net_results nn ON UPPER(nn.symbol) = UPPER(?) AND nn.analysis_quarter = ?
+        LEFT JOIN garp_peg_results gp ON UPPER(gp.symbol) = UPPER(?) AND gp.analysis_quarter = ?
+        LEFT JOIN magic_formula_results mf ON UPPER(mf.symbol) = UPPER(?) AND mf.analysis_quarter = ?
+        LEFT JOIN fama_french_results ff ON UPPER(ff.symbol) = UPPER(?) AND ff.analysis_quarter = ?
+        LEFT JOIN (
+            SELECT *
+            FROM key_metrics
+            WHERE UPPER(symbol) = UPPER(?)
+            AND fiscal_date <= ?
+            ORDER BY fiscal_date DESC
+            LIMIT 1
+        ) km ON 1=1
+        """,
+        (
+            symbol, quarter,  # altman
+            symbol, quarter,  # piotroski
+            symbol, quarter,  # roic
+            symbol, quarter,  # graham
+            symbol, quarter,  # net_net
+            symbol, quarter,  # garp_peg
+            symbol, quarter,  # magic_formula
+            symbol, quarter,  # fama_french
+            symbol, _quarter_to_date(quarter),  # key_metrics
+        ),
+    ).fetchone()
+
+    if not result:
+        return None
+
+    columns = [desc[0] for desc in conn.description]
+    return dict(zip(columns, result))
