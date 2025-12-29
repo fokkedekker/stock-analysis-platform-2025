@@ -29,6 +29,13 @@ export interface FactorDiscoveryRequest {
   ranking_method: string;
   max_factors: number;
   exclusions: ExclusionFilters;
+  factor_categories: string[];
+}
+
+export interface FactorCategory {
+  id: string;
+  label: string;
+  count: number;
 }
 
 export interface PortfolioStats {
@@ -84,6 +91,12 @@ export interface CombinedStrategyResult {
   portfolio_stats: Record<number, PortfolioStats>;
 }
 
+export interface RawFactorFilter {
+  factor: string;
+  operator: string;
+  value: number | string;
+}
+
 export interface PipelineSettings {
   piotroski_enabled: boolean;
   piotroski_min: number;
@@ -105,6 +118,8 @@ export interface PipelineSettings {
   ff_top_pct: number;
   min_lenses: number;
   strict_mode: boolean;
+  // Raw factor filters (from Factor Discovery or manual)
+  raw_filters: RawFactorFilter[];
 }
 
 export interface RecommendedStrategy {
@@ -185,9 +200,11 @@ export interface FactorConfig {
   direction?: string;
   categories?: string[];
   positive?: boolean;
+  category?: string;  // e.g., "scores", "raw_valuation", "raw_profitability"
 }
 
 export interface FactorsResponse {
+  categories: FactorCategory[];  // Available factor categories
   numerical: FactorConfig[];
   categorical: FactorConfig[];
   boolean: FactorConfig[];

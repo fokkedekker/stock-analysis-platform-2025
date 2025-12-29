@@ -633,6 +633,30 @@ CREATE TABLE IF NOT EXISTS recommended_strategies (
 )
 """
 
+# ============================================================================
+# User Saved Strategies Table
+# ============================================================================
+
+SAVED_STRATEGIES_TABLE = """
+CREATE TABLE IF NOT EXISTS saved_strategies (
+    id VARCHAR PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    holding_period INTEGER,
+    -- Full settings as JSON (includes PipelineSettings + raw_filters)
+    settings_json JSON NOT NULL,
+    -- Performance expectations from Factor Discovery
+    expected_alpha DOUBLE,
+    expected_alpha_ci_lower DOUBLE,
+    expected_alpha_ci_upper DOUBLE,
+    win_rate DOUBLE,
+    sample_size INTEGER,
+    -- Metadata
+    source VARCHAR DEFAULT 'manual',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 ALL_TABLES = [
     ("tickers", TICKERS_TABLE),
     ("company_profiles", COMPANY_PROFILES_TABLE),
@@ -658,6 +682,8 @@ ALL_TABLES = [
     ("factor_results", FACTOR_RESULTS_TABLE),
     ("combined_strategy_results", COMBINED_STRATEGY_RESULTS_TABLE),
     ("recommended_strategies", RECOMMENDED_STRATEGIES_TABLE),
+    # User saved strategies
+    ("saved_strategies", SAVED_STRATEGIES_TABLE),
 ]
 
 # Performance indexes for analysis queries

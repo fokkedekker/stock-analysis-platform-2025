@@ -77,13 +77,29 @@ class FactorDiscoveryRequest(BaseModel):
     max_factors: int = Field(
         default=4,
         ge=1,
-        le=18,
-        description="Maximum number of factors to combine (1-18, default 4)",
+        le=55,
+        description="Maximum number of factors to combine (1-55, default 4)",
     )
     # Exclusion filters
     exclusions: ExclusionFilters = Field(
         default_factory=ExclusionFilters,
         description="Filters to exclude certain stocks from analysis",
+    )
+    # Factor category selection (all enabled by default)
+    factor_categories: list[str] = Field(
+        default=[
+            "scores",
+            "raw_valuation",
+            "raw_profitability",
+            "raw_liquidity",
+            "raw_leverage",
+            "raw_efficiency",
+            "raw_dividend",
+            "stability",
+            "growth",
+            "boolean",
+        ],
+        description="Factor categories to analyze (e.g., scores, raw_valuation, raw_profitability)",
     )
 
 
@@ -233,6 +249,9 @@ class PipelineSettings(BaseModel):
     ff_top_pct: int = Field(default=30)
     min_lenses: int = Field(default=1)
     strict_mode: bool = Field(default=False)
+
+    # Raw factor filters (factors not mapped to specific UI controls)
+    raw_filters: list[dict] = Field(default_factory=list)
 
 
 class RecommendedStrategy(BaseModel):

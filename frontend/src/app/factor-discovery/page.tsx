@@ -34,6 +34,7 @@ type ViewState = "configure" | "running" | "results";
 /**
  * Convert filter specifications to Pipeline settings.
  * This mirrors the backend's _build_pipeline_settings logic.
+ * Raw factors that don't map to known settings are preserved in raw_filters.
  */
 function filtersToSettings(filters: FilterSpec[]): PipelineSettings {
   const settings: PipelineSettings = {
@@ -57,6 +58,7 @@ function filtersToSettings(filters: FilterSpec[]): PipelineSettings {
     ff_top_pct: 30,
     min_lenses: 1,
     strict_mode: false,
+    raw_filters: [],
   };
 
   for (const f of filters) {
@@ -68,18 +70,21 @@ function filtersToSettings(filters: FilterSpec[]): PipelineSettings {
       if (typeof f.value === "number") {
         settings.piotroski_min = f.value;
       }
+      continue;
     }
 
     // Altman
     if (factor === "altman_zone") {
       settings.altman_enabled = true;
       settings.altman_zone = String(f.value);
+      continue;
     }
     if (factor === "altman_z_score" && typeof f.value === "number") {
       settings.altman_enabled = true;
       if (f.value >= 2.99) settings.altman_zone = "safe";
       else if (f.value >= 1.81) settings.altman_zone = "grey";
       else settings.altman_zone = "distress";
+      continue;
     }
 
     // Quality tags
@@ -102,6 +107,7 @@ function filtersToSettings(filters: FilterSpec[]): PipelineSettings {
         } else if (f.value === false) {
           settings.excluded_tags.push(tag);
         }
+        continue;
       }
     }
 
@@ -109,35 +115,50 @@ function filtersToSettings(filters: FilterSpec[]): PipelineSettings {
     if (factor === "quality_label") {
       settings.quality_enabled = true;
       settings.min_quality = String(f.value);
+      continue;
     }
 
     // Graham
     if (factor === "graham_score" && typeof f.value === "number") {
       settings.graham_enabled = true;
       settings.graham_min = f.value;
+      continue;
     }
 
     // Book to market (Fama-French)
     if (factor === "book_to_market_percentile" && typeof f.value === "number") {
       settings.fama_french_enabled = true;
       settings.ff_top_pct = Math.round((1 - f.value) * 100);
+      continue;
     }
 
     // PEG
     if (factor === "peg_ratio" && typeof f.value === "number") {
       settings.peg_enabled = true;
       settings.max_peg = f.value;
+      continue;
     }
 
     // Net-net
     if (factor === "net_net_discount") {
       settings.net_net_enabled = true;
+      continue;
     }
 
     // Magic formula
     if (factor === "magic_formula_rank" && typeof f.value === "number") {
       settings.magic_formula_enabled = true;
+      continue;
     }
+
+    // If we get here, it's a raw factor - preserve it
+    // Convert boolean to number (true -> 1, false -> 0) for the backend
+    const value = typeof f.value === "boolean" ? (f.value ? 1 : 0) : f.value;
+    settings.raw_filters.push({
+      factor: f.factor,
+      operator: f.operator,
+      value,
+    });
   }
 
   return settings;
@@ -165,6 +186,34 @@ export default function FactorDiscoveryPage() {
   const [excludeQualityTags, setExcludeQualityTags] = useState<string[]>([]);
   const [excludePennyStocks, setExcludePennyStocks] = useState(false);
   const [excludeNegativeEarnings, setExcludeNegativeEarnings] = useState(false);
+
+  // Factor categories (all enabled by default)
+  const [factorCategories, setFactorCategories] = useState<string[]>([
+    "scores",
+    "raw_valuation",
+    "raw_profitability",
+    "raw_liquidity",
+    "raw_leverage",
+    "raw_efficiency",
+    "raw_dividend",
+    "stability",
+    "growth",
+    "boolean",
+  ]);
+
+  // Category labels and counts for UI
+  const CATEGORY_INFO: Record<string, { label: string; count: number }> = {
+    scores: { label: "Pre-computed Scores", count: 7 },
+    raw_valuation: { label: "Valuation Ratios", count: 9 },
+    raw_profitability: { label: "Profitability", count: 6 },
+    raw_liquidity: { label: "Liquidity", count: 3 },
+    raw_leverage: { label: "Leverage", count: 5 },
+    raw_efficiency: { label: "Efficiency", count: 4 },
+    raw_dividend: { label: "Dividends", count: 2 },
+    stability: { label: "Stability", count: 5 },
+    growth: { label: "Growth", count: 4 },
+    boolean: { label: "Quality Tags", count: 10 },
+  };
 
   // Running state
   const [runId, setRunId] = useState<string | null>(null);
@@ -290,6 +339,7 @@ export default function FactorDiscoveryPage() {
           exclude_penny_stocks: excludePennyStocks,
           exclude_negative_earnings: excludeNegativeEarnings,
         },
+        factor_categories: factorCategories,
       };
 
       const response = await startFactorDiscovery(request);
@@ -316,7 +366,7 @@ export default function FactorDiscoveryPage() {
     }
   };
 
-  const handleSaveStrategy = (hp: number) => {
+  const handleSaveStrategy = async (hp: number) => {
     if (!result) return;
 
     const strategy = result.recommended_strategies[hp];
@@ -327,42 +377,56 @@ export default function FactorDiscoveryPage() {
 
     if (!name) return; // User cancelled
 
-    saveStrategy({
-      name: name.trim() || defaultName,
-      holding_period: hp,
-      settings: strategy.pipeline_settings,
-      expected_alpha: strategy.expected_alpha,
-      expected_alpha_ci_lower: strategy.expected_alpha_ci_lower,
-      expected_alpha_ci_upper: strategy.expected_alpha_ci_upper,
-      win_rate: strategy.expected_win_rate,
-      sample_size: strategy.sample_size,
-      source: "factor_discovery",
-    });
+    try {
+      // Ensure pipeline_settings has raw_filters (even if empty)
+      const settings = {
+        ...strategy.pipeline_settings,
+        raw_filters: strategy.pipeline_settings.raw_filters || [],
+      };
 
-    alert(`Strategy "${name}" saved! You can load it in the Pipeline page.`);
+      await saveStrategy({
+        name: name.trim() || defaultName,
+        holding_period: hp,
+        settings,
+        expected_alpha: strategy.expected_alpha,
+        expected_alpha_ci_lower: strategy.expected_alpha_ci_lower,
+        expected_alpha_ci_upper: strategy.expected_alpha_ci_upper,
+        win_rate: strategy.expected_win_rate,
+        sample_size: strategy.sample_size,
+        source: "factor_discovery",
+      });
+
+      alert(`Strategy "${name}" saved! You can load it in the Pipeline page.`);
+    } catch (err) {
+      alert(`Failed to save strategy: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
   };
 
-  const handleSaveCombo = (hp: number, combo: CombinedStrategyResult, index: number) => {
+  const handleSaveCombo = async (hp: number, combo: CombinedStrategyResult, index: number) => {
     const defaultName = `Strategy #${index + 1} (${hp}Q) - ${new Date().toLocaleDateString()}`;
     const name = prompt("Enter a name for this strategy:", defaultName);
 
     if (!name) return; // User cancelled
 
-    const settings = filtersToSettings(combo.filters);
+    try {
+      const settings = filtersToSettings(combo.filters);
 
-    saveStrategy({
-      name: name.trim() || defaultName,
-      holding_period: hp,
-      settings,
-      expected_alpha: combo.mean_alpha,
-      expected_alpha_ci_lower: combo.ci_lower,
-      expected_alpha_ci_upper: combo.ci_upper,
-      win_rate: combo.win_rate,
-      sample_size: combo.sample_size,
-      source: "factor_discovery",
-    });
+      await saveStrategy({
+        name: name.trim() || defaultName,
+        holding_period: hp,
+        settings,
+        expected_alpha: combo.mean_alpha,
+        expected_alpha_ci_lower: combo.ci_lower,
+        expected_alpha_ci_upper: combo.ci_upper,
+        win_rate: combo.win_rate,
+        sample_size: combo.sample_size,
+        source: "factor_discovery",
+      });
 
-    alert(`Strategy "${name}" saved! You can load it in the Pipeline page.`);
+      alert(`Strategy "${name}" saved! You can load it in the Pipeline page.`);
+    } catch (err) {
+      alert(`Failed to save strategy: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
   };
 
   const handleLoadHistoryResult = async (summary: FactorDiscoverySummary) => {
@@ -1079,6 +1143,69 @@ export default function FactorDiscoveryPage() {
               </div>
             </div>
 
+            {/* Factor Categories */}
+            <div className="p-4 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200 dark:border-blue-800">
+              <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-3">
+                Factor Categories
+              </h3>
+              <p className="text-xs text-blue-700 dark:text-blue-300 mb-4">
+                Select which factor categories to analyze. More categories = more factors = longer analysis time.
+              </p>
+
+              <div className="flex flex-wrap gap-2 mb-3">
+                {Object.entries(CATEGORY_INFO).map(([id, { label, count }]) => (
+                  <button
+                    key={id}
+                    onClick={() => {
+                      if (factorCategories.includes(id)) {
+                        setFactorCategories(factorCategories.filter((c) => c !== id));
+                      } else {
+                        setFactorCategories([...factorCategories, id]);
+                      }
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      factorCategories.includes(id)
+                        ? "bg-blue-600 text-white"
+                        : "bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700"
+                    }`}
+                  >
+                    {label} ({count})
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-blue-700 dark:text-blue-300">
+                  <span className="font-semibold">
+                    {factorCategories.reduce((sum, cat) => sum + (CATEGORY_INFO[cat]?.count || 0), 0)}
+                  </span>{" "}
+                  factors selected
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setFactorCategories(Object.keys(CATEGORY_INFO))}
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    Select All
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    onClick={() => setFactorCategories(["scores", "boolean"])}
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    Scores Only
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    onClick={() => setFactorCategories(["raw_valuation", "raw_profitability", "raw_leverage"])}
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    Raw Metrics Only
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Other Settings */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div>
@@ -1090,9 +1217,9 @@ export default function FactorDiscoveryPage() {
                   onChange={(e) => setMaxFactors(parseInt(e.target.value))}
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
                 >
-                  {[2, 3, 4, 5, 6, 8, 10, 12, 15, 18].map((n) => (
+                  {[2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 55].map((n) => (
                     <option key={n} value={n}>
-                      {n} factors {n === 4 ? "(recommended)" : n >= 8 ? "(slow)" : ""}
+                      {n} factors {n === 4 ? "(recommended)" : n >= 20 ? "(very slow)" : n >= 10 ? "(slow)" : ""}
                     </option>
                   ))}
                 </select>

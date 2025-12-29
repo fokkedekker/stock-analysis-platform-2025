@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import tickers, financials, analysis, screener, explain, backtest, gridsearch, factor_discovery
+from src.api.routes import tickers, financials, analysis, screener, explain, backtest, gridsearch, factor_discovery, strategies
 from src.database.connection import get_db_manager
 
 
@@ -33,6 +33,7 @@ app.include_router(explain.router, prefix="/api/v1/explain", tags=["Explain"])
 app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["Backtest"])
 app.include_router(gridsearch.router, prefix="/api/v1/gridsearch", tags=["Grid Search"])
 app.include_router(factor_discovery.router, prefix="/api/v1/factor-discovery", tags=["Factor Discovery"])
+app.include_router(strategies.router, prefix="/api/v1/strategies", tags=["Strategies"])
 
 
 @app.get("/")

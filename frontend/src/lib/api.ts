@@ -216,6 +216,12 @@ export interface PipelineResponse {
   stocks: PipelineStock[];
 }
 
+export interface RawFactorFilter {
+  factor: string;
+  operator: string;
+  value: number | string;
+}
+
 export interface PipelineParams {
   // Stage 1
   require_altman?: boolean;
@@ -239,6 +245,8 @@ export interface PipelineParams {
   max_peg?: number;
   mf_top_pct?: number;
   ff_bm_top_pct?: number;
+  // Raw factor filters (from Factor Discovery or manual)
+  raw_filters?: RawFactorFilter[];
   // Ranking
   rank_by?: RankMethod;
   limit?: number;
@@ -340,6 +348,11 @@ export async function getPipelineStocks(params: PipelineParams = {}, quarter?: s
   if (params.max_peg !== undefined) searchParams.set('max_peg', String(params.max_peg));
   if (params.mf_top_pct !== undefined) searchParams.set('mf_top_pct', String(params.mf_top_pct));
   if (params.ff_bm_top_pct !== undefined) searchParams.set('ff_bm_top_pct', String(params.ff_bm_top_pct));
+
+  // Raw factor filters (JSON array)
+  if (params.raw_filters && params.raw_filters.length > 0) {
+    searchParams.set('raw_filters', JSON.stringify(params.raw_filters));
+  }
 
   // Ranking
   if (params.rank_by) searchParams.set('rank_by', params.rank_by);

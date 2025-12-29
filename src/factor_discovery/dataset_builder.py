@@ -300,6 +300,21 @@ class DatasetBuilder:
 
         Returns dict: symbol -> {all analysis fields}
         """
+        # Convert quarter to date range for key_metrics matching
+        # e.g., "2024Q1" -> year=2024, q=1
+        year = int(quarter[:4])
+        q = int(quarter[-1])
+
+        # Calculate the end date of the quarter for point-in-time matching
+        if q == 1:
+            quarter_end = f"{year}-03-31"
+        elif q == 2:
+            quarter_end = f"{year}-06-30"
+        elif q == 3:
+            quarter_end = f"{year}-09-30"
+        else:  # q == 4
+            quarter_end = f"{year}-12-31"
+
         result = conn.execute(
             """
             SELECT
@@ -314,11 +329,16 @@ class DatasetBuilder:
                 -- Piotroski
                 p.f_score as piotroski_score,
 
-                -- ROIC/Quality
+                -- ROIC/Quality (existing + new stability metrics)
                 r.roic,
                 r.free_cash_flow,
                 r.fcf_positive_5yr,
                 r.quality_tags,
+                r.roic_std_dev,
+                r.gross_margin_std_dev,
+                r.fcf_to_net_income,
+                r.reinvestment_rate,
+                r.fcf_yield,
 
                 -- Graham
                 g.criteria_passed as graham_score,
@@ -329,10 +349,13 @@ class DatasetBuilder:
                 nn.trading_below_ncav,
                 nn.discount_to_ncav as net_net_discount,
 
-                -- PEG
+                -- PEG (existing + new growth metrics)
                 gp.peg_ratio,
                 gp.eps_cagr,
                 gp.peg_pass,
+                gp.eps_growth_1yr,
+                gp.eps_growth_3yr,
+                gp.eps_growth_5yr,
 
                 -- Magic Formula
                 mf.combined_rank as magic_formula_rank,
@@ -341,7 +364,38 @@ class DatasetBuilder:
 
                 -- Fama-French
                 ff.book_to_market_percentile,
-                ff.profitability_percentile
+                ff.profitability_percentile,
+
+                -- Key Metrics (raw financial ratios)
+                km.pe_ratio,
+                km.pb_ratio,
+                km.price_to_sales,
+                km.price_to_free_cash_flow,
+                km.price_to_operating_cash_flow,
+                km.ev_to_ebitda,
+                km.ev_to_sales,
+                km.ev_to_free_cash_flow,
+                km.ev_to_operating_cash_flow,
+                km.roe,
+                km.roa,
+                km.return_on_tangible_assets,
+                km.gross_profit_margin,
+                km.operating_profit_margin,
+                km.net_profit_margin,
+                km.current_ratio,
+                km.quick_ratio,
+                km.cash_ratio,
+                km.debt_ratio,
+                km.debt_to_equity,
+                km.debt_to_assets,
+                km.net_debt_to_ebitda,
+                km.interest_coverage,
+                km.asset_turnover,
+                km.inventory_turnover,
+                km.receivables_turnover,
+                km.payables_turnover,
+                km.dividend_yield,
+                km.payout_ratio
 
             FROM tickers t
             LEFT JOIN altman_results a ON t.symbol = a.symbol
@@ -361,9 +415,27 @@ class DatasetBuilder:
                 AND mf.analysis_quarter = ?
             LEFT JOIN fama_french_results ff ON t.symbol = ff.symbol
                 AND ff.analysis_quarter = ?
+            -- Key metrics: get the latest annual data up to the quarter end date
+            LEFT JOIN (
+                SELECT DISTINCT ON (symbol)
+                    symbol,
+                    pe_ratio, pb_ratio, price_to_sales, price_to_free_cash_flow,
+                    price_to_operating_cash_flow, ev_to_ebitda, ev_to_sales,
+                    ev_to_free_cash_flow, ev_to_operating_cash_flow,
+                    roe, roa, return_on_tangible_assets,
+                    gross_profit_margin, operating_profit_margin, net_profit_margin,
+                    current_ratio, quick_ratio, cash_ratio,
+                    debt_ratio, debt_to_equity, debt_to_assets, net_debt_to_ebitda,
+                    interest_coverage,
+                    asset_turnover, inventory_turnover, receivables_turnover, payables_turnover,
+                    dividend_yield, payout_ratio
+                FROM key_metrics
+                WHERE fiscal_date <= ?
+                ORDER BY symbol, fiscal_date DESC
+            ) km ON t.symbol = km.symbol
             WHERE t.is_active = TRUE
             """,
-            (quarter,) * 8,
+            (quarter,) * 8 + (quarter_end,),
         ).fetchall()
 
         columns = [desc[0] for desc in conn.description]
@@ -375,6 +447,7 @@ class DatasetBuilder:
 
             # Convert Decimals to floats
             for key in [
+                # Existing analysis metrics
                 "altman_z_score",
                 "roic",
                 "free_cash_flow",
@@ -387,6 +460,51 @@ class DatasetBuilder:
                 "mf_roic",
                 "book_to_market_percentile",
                 "profitability_percentile",
+                # New ROIC stability metrics
+                "roic_std_dev",
+                "gross_margin_std_dev",
+                "fcf_to_net_income",
+                "reinvestment_rate",
+                "fcf_yield",
+                # New growth metrics
+                "eps_growth_1yr",
+                "eps_growth_3yr",
+                "eps_growth_5yr",
+                # Key metrics - valuation
+                "pe_ratio",
+                "pb_ratio",
+                "price_to_sales",
+                "price_to_free_cash_flow",
+                "price_to_operating_cash_flow",
+                "ev_to_ebitda",
+                "ev_to_sales",
+                "ev_to_free_cash_flow",
+                "ev_to_operating_cash_flow",
+                # Key metrics - profitability
+                "roe",
+                "roa",
+                "return_on_tangible_assets",
+                "gross_profit_margin",
+                "operating_profit_margin",
+                "net_profit_margin",
+                # Key metrics - liquidity
+                "current_ratio",
+                "quick_ratio",
+                "cash_ratio",
+                # Key metrics - leverage
+                "debt_ratio",
+                "debt_to_equity",
+                "debt_to_assets",
+                "net_debt_to_ebitda",
+                "interest_coverage",
+                # Key metrics - efficiency
+                "asset_turnover",
+                "inventory_turnover",
+                "receivables_turnover",
+                "payables_turnover",
+                # Key metrics - dividends
+                "dividend_yield",
+                "payout_ratio",
             ]:
                 if key in record:
                     record[key] = _to_float(record[key])
@@ -429,7 +547,9 @@ class DatasetBuilder:
             "alpha": round(alpha, 4),
         }
 
-        # Add numerical metrics
+        # =====================================================================
+        # Pre-computed Scores (existing)
+        # =====================================================================
         obs["piotroski_score"] = data.get("piotroski_score")
         obs["graham_score"] = data.get("graham_score")
         obs["altman_z_score"] = data.get("altman_z_score")
@@ -441,10 +561,84 @@ class DatasetBuilder:
         obs["earnings_yield"] = data.get("earnings_yield")
         obs["profitability_percentile"] = data.get("profitability_percentile")
 
-        # Add categorical metrics
+        # =====================================================================
+        # Stability Metrics (from roic_quality_results)
+        # =====================================================================
+        obs["roic_std_dev"] = data.get("roic_std_dev")
+        obs["gross_margin_std_dev"] = data.get("gross_margin_std_dev")
+        obs["fcf_to_net_income"] = data.get("fcf_to_net_income")
+        obs["reinvestment_rate"] = data.get("reinvestment_rate")
+        obs["fcf_yield"] = data.get("fcf_yield")
+
+        # =====================================================================
+        # Growth Metrics (from garp_peg_results)
+        # =====================================================================
+        obs["eps_growth_1yr"] = data.get("eps_growth_1yr")
+        obs["eps_growth_3yr"] = data.get("eps_growth_3yr")
+        obs["eps_growth_5yr"] = data.get("eps_growth_5yr")
+        obs["eps_cagr"] = data.get("eps_cagr")
+
+        # =====================================================================
+        # Raw Valuation Metrics (from key_metrics)
+        # =====================================================================
+        obs["pe_ratio"] = data.get("pe_ratio")
+        obs["pb_ratio"] = data.get("pb_ratio")
+        obs["price_to_sales"] = data.get("price_to_sales")
+        obs["price_to_free_cash_flow"] = data.get("price_to_free_cash_flow")
+        obs["price_to_operating_cash_flow"] = data.get("price_to_operating_cash_flow")
+        obs["ev_to_ebitda"] = data.get("ev_to_ebitda")
+        obs["ev_to_sales"] = data.get("ev_to_sales")
+        obs["ev_to_free_cash_flow"] = data.get("ev_to_free_cash_flow")
+        obs["ev_to_operating_cash_flow"] = data.get("ev_to_operating_cash_flow")
+
+        # =====================================================================
+        # Raw Profitability Metrics (from key_metrics)
+        # =====================================================================
+        obs["roe"] = data.get("roe")
+        obs["roa"] = data.get("roa")
+        obs["return_on_tangible_assets"] = data.get("return_on_tangible_assets")
+        obs["gross_profit_margin"] = data.get("gross_profit_margin")
+        obs["operating_profit_margin"] = data.get("operating_profit_margin")
+        obs["net_profit_margin"] = data.get("net_profit_margin")
+
+        # =====================================================================
+        # Raw Liquidity Metrics (from key_metrics)
+        # =====================================================================
+        obs["current_ratio"] = data.get("current_ratio")
+        obs["quick_ratio"] = data.get("quick_ratio")
+        obs["cash_ratio"] = data.get("cash_ratio")
+
+        # =====================================================================
+        # Raw Leverage Metrics (from key_metrics)
+        # =====================================================================
+        obs["debt_ratio"] = data.get("debt_ratio")
+        obs["debt_to_equity"] = data.get("debt_to_equity")
+        obs["debt_to_assets"] = data.get("debt_to_assets")
+        obs["net_debt_to_ebitda"] = data.get("net_debt_to_ebitda")
+        obs["interest_coverage"] = data.get("interest_coverage")
+
+        # =====================================================================
+        # Raw Efficiency Metrics (from key_metrics)
+        # =====================================================================
+        obs["asset_turnover"] = data.get("asset_turnover")
+        obs["inventory_turnover"] = data.get("inventory_turnover")
+        obs["receivables_turnover"] = data.get("receivables_turnover")
+        obs["payables_turnover"] = data.get("payables_turnover")
+
+        # =====================================================================
+        # Raw Dividend Metrics (from key_metrics)
+        # =====================================================================
+        obs["dividend_yield"] = data.get("dividend_yield")
+        obs["payout_ratio"] = data.get("payout_ratio")
+
+        # =====================================================================
+        # Categorical metrics
+        # =====================================================================
         obs["altman_zone"] = data.get("altman_zone")
 
-        # Add boolean metrics
+        # =====================================================================
+        # Boolean metrics
+        # =====================================================================
         obs["trading_below_ncav"] = bool(data.get("trading_below_ncav"))
         obs["fcf_positive_5yr"] = bool(data.get("fcf_positive_5yr"))
         obs["peg_pass"] = bool(data.get("peg_pass"))
@@ -460,7 +654,9 @@ class DatasetBuilder:
         obs["has_weak_moat_signal"] = "Weak Moat Signal" in quality_tags
         obs["has_earnings_quality_concern"] = "Earnings Quality Concern" in quality_tags
 
+        # =====================================================================
         # Additional derived fields
+        # =====================================================================
         obs["sector"] = data.get("sector")
         obs["name"] = data.get("name")
 

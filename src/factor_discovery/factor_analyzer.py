@@ -57,68 +57,420 @@ def bootstrap_ci(
 class FactorAnalyzer:
     """Analyzes individual factors for predictive power."""
 
-    # Factor configurations: name -> {thresholds, direction}
-    NUMERICAL_FACTORS = {
+    # =========================================================================
+    # Pre-computed Scores (existing)
+    # =========================================================================
+    SCORE_FACTORS = {
         "piotroski_score": {
             "thresholds": [3, 4, 5, 6, 7, 8],
             "direction": ">=",
             "label": "Piotroski F-Score",
+            "category": "scores",
         },
         "graham_score": {
             "thresholds": [3, 4, 5, 6, 7],
             "direction": ">=",
             "label": "Graham Score",
+            "category": "scores",
         },
         "altman_z_score": {
             "thresholds": [1.8, 2.0, 2.5, 3.0],
             "direction": ">=",
             "label": "Altman Z-Score",
+            "category": "scores",
         },
         "roic": {
             "thresholds": [0.08, 0.10, 0.12, 0.15, 0.20],
             "direction": ">=",
-            "label": "ROIC",
+            "label": "ROIC (Analysis)",
+            "category": "scores",
         },
         "peg_ratio": {
             "thresholds": [0.5, 1.0, 1.5, 2.0, 2.5, 3.0],
             "direction": "<=",
             "label": "PEG Ratio",
+            "category": "scores",
         },
         "magic_formula_rank": {
             "thresholds": [100, 200, 500, 1000],
             "direction": "<=",
             "label": "Magic Formula Rank",
+            "category": "scores",
         },
         "book_to_market_percentile": {
             "thresholds": [0.50, 0.60, 0.70, 0.80],
             "direction": ">=",
             "label": "Book/Market Percentile",
+            "category": "scores",
         },
     }
+
+    # =========================================================================
+    # Raw Valuation Metrics (from key_metrics)
+    # =========================================================================
+    RAW_VALUATION_FACTORS = {
+        "pe_ratio": {
+            "thresholds": [5, 10, 15, 20, 30],
+            "direction": "<=",
+            "label": "P/E Ratio",
+            "category": "raw_valuation",
+        },
+        "pb_ratio": {
+            "thresholds": [0.5, 1.0, 1.5, 2.0, 3.0],
+            "direction": "<=",
+            "label": "P/B Ratio",
+            "category": "raw_valuation",
+        },
+        "price_to_sales": {
+            "thresholds": [0.5, 1.0, 2.0, 3.0, 5.0],
+            "direction": "<=",
+            "label": "P/S Ratio",
+            "category": "raw_valuation",
+        },
+        "price_to_free_cash_flow": {
+            "thresholds": [5, 10, 15, 20, 30],
+            "direction": "<=",
+            "label": "P/FCF Ratio",
+            "category": "raw_valuation",
+        },
+        "price_to_operating_cash_flow": {
+            "thresholds": [5, 10, 15, 20],
+            "direction": "<=",
+            "label": "P/OCF Ratio",
+            "category": "raw_valuation",
+        },
+        "ev_to_ebitda": {
+            "thresholds": [5, 8, 10, 12, 15],
+            "direction": "<=",
+            "label": "EV/EBITDA",
+            "category": "raw_valuation",
+        },
+        "ev_to_sales": {
+            "thresholds": [1, 2, 3, 5, 8],
+            "direction": "<=",
+            "label": "EV/Sales",
+            "category": "raw_valuation",
+        },
+        "ev_to_free_cash_flow": {
+            "thresholds": [10, 15, 20, 25, 30],
+            "direction": "<=",
+            "label": "EV/FCF",
+            "category": "raw_valuation",
+        },
+        "ev_to_operating_cash_flow": {
+            "thresholds": [8, 12, 16, 20],
+            "direction": "<=",
+            "label": "EV/OCF",
+            "category": "raw_valuation",
+        },
+    }
+
+    # =========================================================================
+    # Raw Profitability Metrics (from key_metrics)
+    # =========================================================================
+    RAW_PROFITABILITY_FACTORS = {
+        "roe": {
+            "thresholds": [0.05, 0.10, 0.15, 0.20, 0.25],
+            "direction": ">=",
+            "label": "ROE",
+            "category": "raw_profitability",
+        },
+        "roa": {
+            "thresholds": [0.03, 0.05, 0.08, 0.10, 0.15],
+            "direction": ">=",
+            "label": "ROA",
+            "category": "raw_profitability",
+        },
+        "return_on_tangible_assets": {
+            "thresholds": [0.05, 0.10, 0.15, 0.20],
+            "direction": ">=",
+            "label": "ROTA",
+            "category": "raw_profitability",
+        },
+        "gross_profit_margin": {
+            "thresholds": [0.20, 0.30, 0.40, 0.50, 0.60],
+            "direction": ">=",
+            "label": "Gross Margin",
+            "category": "raw_profitability",
+        },
+        "operating_profit_margin": {
+            "thresholds": [0.05, 0.10, 0.15, 0.20, 0.25],
+            "direction": ">=",
+            "label": "Operating Margin",
+            "category": "raw_profitability",
+        },
+        "net_profit_margin": {
+            "thresholds": [0.03, 0.05, 0.08, 0.10, 0.15],
+            "direction": ">=",
+            "label": "Net Margin",
+            "category": "raw_profitability",
+        },
+    }
+
+    # =========================================================================
+    # Raw Liquidity Metrics (from key_metrics)
+    # =========================================================================
+    RAW_LIQUIDITY_FACTORS = {
+        "current_ratio": {
+            "thresholds": [1.0, 1.5, 2.0, 2.5, 3.0],
+            "direction": ">=",
+            "label": "Current Ratio",
+            "category": "raw_liquidity",
+        },
+        "quick_ratio": {
+            "thresholds": [0.5, 1.0, 1.5, 2.0],
+            "direction": ">=",
+            "label": "Quick Ratio",
+            "category": "raw_liquidity",
+        },
+        "cash_ratio": {
+            "thresholds": [0.1, 0.2, 0.3, 0.5],
+            "direction": ">=",
+            "label": "Cash Ratio",
+            "category": "raw_liquidity",
+        },
+    }
+
+    # =========================================================================
+    # Raw Leverage Metrics (from key_metrics)
+    # =========================================================================
+    RAW_LEVERAGE_FACTORS = {
+        "debt_ratio": {
+            "thresholds": [0.3, 0.4, 0.5, 0.6, 0.7],
+            "direction": "<=",
+            "label": "Debt Ratio",
+            "category": "raw_leverage",
+        },
+        "debt_to_equity": {
+            "thresholds": [0.25, 0.50, 1.0, 1.5, 2.0],
+            "direction": "<=",
+            "label": "Debt/Equity",
+            "category": "raw_leverage",
+        },
+        "debt_to_assets": {
+            "thresholds": [0.2, 0.3, 0.4, 0.5, 0.6],
+            "direction": "<=",
+            "label": "Debt/Assets",
+            "category": "raw_leverage",
+        },
+        "net_debt_to_ebitda": {
+            "thresholds": [1, 2, 3, 4, 5],
+            "direction": "<=",
+            "label": "Net Debt/EBITDA",
+            "category": "raw_leverage",
+        },
+        "interest_coverage": {
+            "thresholds": [2, 4, 6, 8, 10],
+            "direction": ">=",
+            "label": "Interest Coverage",
+            "category": "raw_leverage",
+        },
+    }
+
+    # =========================================================================
+    # Raw Efficiency Metrics (from key_metrics)
+    # =========================================================================
+    RAW_EFFICIENCY_FACTORS = {
+        "asset_turnover": {
+            "thresholds": [0.5, 1.0, 1.5, 2.0],
+            "direction": ">=",
+            "label": "Asset Turnover",
+            "category": "raw_efficiency",
+        },
+        "inventory_turnover": {
+            "thresholds": [3, 5, 7, 10, 15],
+            "direction": ">=",
+            "label": "Inventory Turnover",
+            "category": "raw_efficiency",
+        },
+        "receivables_turnover": {
+            "thresholds": [5, 8, 10, 12, 15],
+            "direction": ">=",
+            "label": "Receivables Turnover",
+            "category": "raw_efficiency",
+        },
+        "payables_turnover": {
+            "thresholds": [4, 6, 8, 10, 12],
+            "direction": ">=",
+            "label": "Payables Turnover",
+            "category": "raw_efficiency",
+        },
+    }
+
+    # =========================================================================
+    # Raw Dividend Metrics (from key_metrics)
+    # =========================================================================
+    RAW_DIVIDEND_FACTORS = {
+        "dividend_yield": {
+            "thresholds": [0.01, 0.02, 0.03, 0.04, 0.05],
+            "direction": ">=",
+            "label": "Dividend Yield",
+            "category": "raw_dividend",
+        },
+        "payout_ratio": {
+            "thresholds": [0.30, 0.50, 0.70, 0.90],
+            "direction": "<=",
+            "label": "Payout Ratio",
+            "category": "raw_dividend",
+        },
+    }
+
+    # =========================================================================
+    # Stability Metrics (from roic_quality_results)
+    # =========================================================================
+    STABILITY_FACTORS = {
+        "roic_std_dev": {
+            "thresholds": [0.02, 0.05, 0.08, 0.10],
+            "direction": "<=",
+            "label": "ROIC Std Dev",
+            "category": "stability",
+        },
+        "gross_margin_std_dev": {
+            "thresholds": [0.02, 0.05, 0.08, 0.10],
+            "direction": "<=",
+            "label": "Gross Margin Std Dev",
+            "category": "stability",
+        },
+        "fcf_to_net_income": {
+            "thresholds": [0.5, 0.8, 1.0, 1.2],
+            "direction": ">=",
+            "label": "FCF/Net Income",
+            "category": "stability",
+        },
+        "reinvestment_rate": {
+            "thresholds": [0.2, 0.4, 0.6, 0.8],
+            "direction": ">=",
+            "label": "Reinvestment Rate",
+            "category": "stability",
+        },
+        "fcf_yield": {
+            "thresholds": [0.03, 0.05, 0.08, 0.10],
+            "direction": ">=",
+            "label": "FCF Yield",
+            "category": "stability",
+        },
+    }
+
+    # =========================================================================
+    # Growth Metrics (from garp_peg_results)
+    # =========================================================================
+    GROWTH_FACTORS = {
+        "eps_growth_1yr": {
+            "thresholds": [0.05, 0.10, 0.15, 0.20, 0.30],
+            "direction": ">=",
+            "label": "EPS Growth 1yr",
+            "category": "growth",
+        },
+        "eps_growth_3yr": {
+            "thresholds": [0.05, 0.10, 0.15, 0.20],
+            "direction": ">=",
+            "label": "EPS Growth 3yr",
+            "category": "growth",
+        },
+        "eps_growth_5yr": {
+            "thresholds": [0.05, 0.10, 0.15],
+            "direction": ">=",
+            "label": "EPS Growth 5yr",
+            "category": "growth",
+        },
+        "eps_cagr": {
+            "thresholds": [0.05, 0.10, 0.15, 0.20],
+            "direction": ">=",
+            "label": "EPS CAGR",
+            "category": "growth",
+        },
+    }
+
+    # =========================================================================
+    # Combined: All Numerical Factors
+    # =========================================================================
+    NUMERICAL_FACTORS = {
+        **SCORE_FACTORS,
+        **RAW_VALUATION_FACTORS,
+        **RAW_PROFITABILITY_FACTORS,
+        **RAW_LIQUIDITY_FACTORS,
+        **RAW_LEVERAGE_FACTORS,
+        **RAW_EFFICIENCY_FACTORS,
+        **RAW_DIVIDEND_FACTORS,
+        **STABILITY_FACTORS,
+        **GROWTH_FACTORS,
+    }
+
+    # =========================================================================
+    # Factor Categories (for UI)
+    # =========================================================================
+    FACTOR_CATEGORIES = [
+        {"id": "scores", "label": "Pre-computed Scores", "count": len(SCORE_FACTORS)},
+        {"id": "raw_valuation", "label": "Valuation Ratios", "count": len(RAW_VALUATION_FACTORS)},
+        {"id": "raw_profitability", "label": "Profitability", "count": len(RAW_PROFITABILITY_FACTORS)},
+        {"id": "raw_liquidity", "label": "Liquidity", "count": len(RAW_LIQUIDITY_FACTORS)},
+        {"id": "raw_leverage", "label": "Leverage", "count": len(RAW_LEVERAGE_FACTORS)},
+        {"id": "raw_efficiency", "label": "Efficiency", "count": len(RAW_EFFICIENCY_FACTORS)},
+        {"id": "raw_dividend", "label": "Dividends", "count": len(RAW_DIVIDEND_FACTORS)},
+        {"id": "stability", "label": "Stability", "count": len(STABILITY_FACTORS)},
+        {"id": "growth", "label": "Growth", "count": len(GROWTH_FACTORS)},
+        {"id": "boolean", "label": "Quality Tags", "count": 10},  # Boolean factors
+    ]
 
     CATEGORICAL_FACTORS = {
         "altman_zone": {
             "categories": ["safe", "grey", "distress"],
             "label": "Altman Zone",
+            "category": "scores",
         },
     }
 
     # Boolean factors: has_X means "stock has this tag"
     BOOLEAN_FACTORS = {
         # Positive tags (require = good)
-        "has_durable_compounder": {"label": "Durable Compounder", "positive": True},
-        "has_cash_machine": {"label": "Cash Machine", "positive": True},
-        "has_deep_value": {"label": "Deep Value", "positive": True},
-        "has_heavy_reinvestor": {"label": "Heavy Reinvestor", "positive": True},
+        "has_durable_compounder": {"label": "Durable Compounder", "positive": True, "category": "boolean"},
+        "has_cash_machine": {"label": "Cash Machine", "positive": True, "category": "boolean"},
+        "has_deep_value": {"label": "Deep Value", "positive": True, "category": "boolean"},
+        "has_heavy_reinvestor": {"label": "Heavy Reinvestor", "positive": True, "category": "boolean"},
         # Negative tags (exclude = good)
-        "has_premium_priced": {"label": "Premium Priced", "positive": False},
-        "has_volatile_returns": {"label": "Volatile Returns", "positive": False},
-        "has_weak_moat_signal": {"label": "Weak Moat Signal", "positive": False},
-        "has_earnings_quality_concern": {"label": "Earnings Quality Concern", "positive": False},
+        "has_premium_priced": {"label": "Premium Priced", "positive": False, "category": "boolean"},
+        "has_volatile_returns": {"label": "Volatile Returns", "positive": False, "category": "boolean"},
+        "has_weak_moat_signal": {"label": "Weak Moat Signal", "positive": False, "category": "boolean"},
+        "has_earnings_quality_concern": {"label": "Earnings Quality Concern", "positive": False, "category": "boolean"},
         # Other booleans
-        "trading_below_ncav": {"label": "Trading Below NCAV", "positive": True},
-        "fcf_positive_5yr": {"label": "FCF Positive 5yr", "positive": True},
+        "trading_below_ncav": {"label": "Trading Below NCAV", "positive": True, "category": "boolean"},
+        "fcf_positive_5yr": {"label": "FCF Positive 5yr", "positive": True, "category": "boolean"},
     }
+
+    @classmethod
+    def get_factors_by_category(cls, categories: list[str]) -> dict:
+        """
+        Get factors filtered by category.
+
+        Args:
+            categories: List of category IDs to include
+
+        Returns:
+            Dict with 'numerical', 'categorical', 'boolean' keys
+        """
+        numerical = {
+            name: config
+            for name, config in cls.NUMERICAL_FACTORS.items()
+            if config.get("category", "scores") in categories
+        }
+
+        categorical = {
+            name: config
+            for name, config in cls.CATEGORICAL_FACTORS.items()
+            if config.get("category", "scores") in categories
+        }
+
+        boolean = {
+            name: config
+            for name, config in cls.BOOLEAN_FACTORS.items()
+            if config.get("category", "boolean") in categories
+        }
+
+        return {
+            "numerical": numerical,
+            "categorical": categorical,
+            "boolean": boolean,
+        }
 
     @staticmethod
     def analyze_numerical(

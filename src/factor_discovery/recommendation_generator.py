@@ -145,10 +145,17 @@ class RecommendationGenerator:
         excluded_tags = []
         required_tags = []
 
+        raw_filters = []
+
         for f in filters:
             mapping = self.FACTOR_TO_PIPELINE.get(f.factor)
             if not mapping:
-                logger.warning(f"No Pipeline mapping for factor: {f.factor}")
+                # Preserve unmapped factors as raw_filters for the Pipeline
+                raw_filters.append({
+                    "factor": f.factor,
+                    "operator": f.operator,
+                    "value": f.value if not isinstance(f.value, bool) else (1 if f.value else 0),
+                })
                 continue
 
             group = mapping.get("group")
@@ -262,6 +269,9 @@ class RecommendationGenerator:
         ])
         if valuation_enabled > 0:
             settings.min_lenses = 1
+
+        # Add raw_filters for factors that don't map to known settings
+        settings.raw_filters = raw_filters
 
         return settings
 

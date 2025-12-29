@@ -23,10 +23,12 @@ import {
   SavedStrategy,
   deleteStrategy,
   formatStrategyDate,
+  type RawFactorFilter,
 } from "@/lib/saved-strategies"
 import { SurvivalGates } from "@/components/strategy/SurvivalGates"
 import { QualityClassification } from "@/components/strategy/QualityClassification"
 import { ValuationLenses, GrahamMode } from "@/components/strategy/ValuationLenses"
+import AdvancedFilters from "@/components/AdvancedFilters"
 
 const ITEMS_PER_PAGE = 50
 
@@ -225,6 +227,9 @@ export default function PipelinePage() {
   const [savedStrategies, setSavedStrategies] = useState<SavedStrategy[]>([])
   const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null)
 
+  // Raw factor filters (from Factor Discovery or manual entry)
+  const [rawFilters, setRawFilters] = useState<RawFactorFilter[]>([])
+
   const fetchData = useCallback(async () => {
     try {
       setLoading(true)
@@ -248,6 +253,7 @@ export default function PipelinePage() {
         max_peg: maxPeg,
         mf_top_pct: mfTopPct,
         ff_bm_top_pct: ffBmTopPct,
+        raw_filters: rawFilters.length > 0 ? rawFilters : undefined,
         rank_by: rankBy,
         limit: 500,
       }
@@ -281,6 +287,7 @@ export default function PipelinePage() {
     maxPeg,
     mfTopPct,
     ffBmTopPct,
+    rawFilters,
     rankBy,
   ])
 
@@ -290,7 +297,7 @@ export default function PipelinePage() {
 
   // Load saved strategies on mount (client-side only)
   useEffect(() => {
-    setSavedStrategies(loadStrategies())
+    loadStrategies().then(setSavedStrategies).catch(console.error)
   }, [])
 
   // Apply a saved strategy to all filters
@@ -333,6 +340,9 @@ export default function PipelinePage() {
     setMinLenses(s.min_lenses ?? 3)
     setStrictMode(s.strict_mode ?? false)
 
+    // Raw factor filters
+    setRawFilters(s.raw_filters ?? [])
+
     setSelectedStrategyId(strategy.id)
   }
 
@@ -359,12 +369,14 @@ export default function PipelinePage() {
     setMaxPeg(1.5)
     setMfTopPct(20)
     setFfBmTopPct(30)
+    setRawFilters([])
   }
 
   // Delete a saved strategy
-  const handleDeleteStrategy = (id: string) => {
-    deleteStrategy(id)
-    setSavedStrategies(loadStrategies())
+  const handleDeleteStrategy = async (id: string) => {
+    await deleteStrategy(id)
+    const strategies = await loadStrategies()
+    setSavedStrategies(strategies)
     if (selectedStrategyId === id) {
       setSelectedStrategyId(null)
     }
@@ -436,7 +448,7 @@ export default function PipelinePage() {
                 <option value="">Select saved strategy...</option>
                 {savedStrategies.map((strategy) => (
                   <option key={strategy.id} value={strategy.id}>
-                    {strategy.name} (Alpha: {strategy.expected_alpha.toFixed(1)}%)
+                    {strategy.name}{strategy.expected_alpha != null ? ` (Alpha: ${strategy.expected_alpha.toFixed(1)}%)` : ""}
                   </option>
                 ))}
               </select>
@@ -475,12 +487,16 @@ export default function PipelinePage() {
               {(() => {
                 const s = savedStrategies.find(s => s.id === selectedStrategyId)
                 if (!s) return null
+                const hasMetrics = s.expected_alpha != null && s.win_rate != null && s.sample_size != null
+                if (!hasMetrics) return <span>No performance metrics available</span>
                 return (
                   <span>
-                    Expected Alpha: {s.expected_alpha.toFixed(1)}%
-                    (95% CI: {s.expected_alpha_ci_lower.toFixed(1)}% to {s.expected_alpha_ci_upper.toFixed(1)}%)
-                    • Win Rate: {s.win_rate.toFixed(0)}%
-                    • Sample: {s.sample_size.toLocaleString()} stocks
+                    Expected Alpha: {s.expected_alpha!.toFixed(1)}%
+                    {s.expected_alpha_ci_lower != null && s.expected_alpha_ci_upper != null && (
+                      <> (95% CI: {s.expected_alpha_ci_lower.toFixed(1)}% to {s.expected_alpha_ci_upper.toFixed(1)}%)</>
+                    )}
+                    {" "}• Win Rate: {s.win_rate!.toFixed(0)}%
+                    • Sample: {s.sample_size!.toLocaleString()} stocks
                   </span>
                 )
               })()}
@@ -540,6 +556,14 @@ export default function PipelinePage() {
         showAdvanced={showAdvanced}
         setShowAdvanced={setShowAdvanced}
       />
+
+      {/* Advanced Filters (Raw Factor Filters) */}
+      <div className="mb-6">
+        <AdvancedFilters
+          filters={rawFilters}
+          onChange={setRawFilters}
+        />
+      </div>
 
       {/* Ranking */}
       <div className="mb-6 flex items-center gap-4">

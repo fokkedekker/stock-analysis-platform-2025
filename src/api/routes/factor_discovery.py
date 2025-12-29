@@ -317,17 +317,22 @@ async def list_factors() -> dict:
     """
     List all factors that will be analyzed.
 
-    Returns the configuration for numerical, categorical, and boolean factors.
+    Returns the configuration for numerical, categorical, and boolean factors,
+    along with available categories for filtering.
     """
     from src.factor_discovery.factor_analyzer import FactorAnalyzer
 
     return {
+        # Factor categories for UI selection
+        "categories": FactorAnalyzer.FACTOR_CATEGORIES,
+        # All factors with their configurations
         "numerical": [
             {
                 "name": name,
                 "label": config.get("label", name),
                 "thresholds": config.get("thresholds", []),
                 "direction": config.get("direction", ">="),
+                "category": config.get("category", "scores"),
             }
             for name, config in FactorAnalyzer.NUMERICAL_FACTORS.items()
         ],
@@ -336,6 +341,7 @@ async def list_factors() -> dict:
                 "name": name,
                 "label": config.get("label", name),
                 "categories": config.get("categories", []),
+                "category": config.get("category", "scores"),
             }
             for name, config in FactorAnalyzer.CATEGORICAL_FACTORS.items()
         ],
@@ -344,6 +350,7 @@ async def list_factors() -> dict:
                 "name": name,
                 "label": config.get("label", name),
                 "positive": config.get("positive", True),
+                "category": config.get("category", "boolean"),
             }
             for name, config in FactorAnalyzer.BOOLEAN_FACTORS.items()
         ],

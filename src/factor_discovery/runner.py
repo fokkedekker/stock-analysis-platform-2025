@@ -150,6 +150,7 @@ class FactorDiscoveryRunner:
                 dataset=dataset,
                 holding_periods=request.holding_periods,
                 min_sample_size=request.min_sample_size,
+                factor_categories=request.factor_categories,
             )
             self._report_progress(run_id, "analyzing_factors", 1.0)
 
@@ -241,6 +242,7 @@ class FactorDiscoveryRunner:
         dataset: dict,
         holding_periods: list[int],
         min_sample_size: int,
+        factor_categories: list[str] | None = None,
     ) -> dict[int, list[FactorResult]]:
         """
         Analyze all factors across all holding periods in parallel.
@@ -251,10 +253,28 @@ class FactorDiscoveryRunner:
             dataset: The built dataset
             holding_periods: List of holding periods
             min_sample_size: Minimum sample size for valid results
+            factor_categories: Optional list of factor categories to include
 
         Returns:
             Dict of holding_period -> list of FactorResult
         """
+        # Get factors filtered by category (or all if not specified)
+        if factor_categories:
+            factors = FactorAnalyzer.get_factors_by_category(factor_categories)
+            numerical_factors = factors["numerical"]
+            categorical_factors = factors["categorical"]
+            boolean_factors = factors["boolean"]
+        else:
+            numerical_factors = FactorAnalyzer.NUMERICAL_FACTORS
+            categorical_factors = FactorAnalyzer.CATEGORICAL_FACTORS
+            boolean_factors = FactorAnalyzer.BOOLEAN_FACTORS
+
+        logger.info(
+            f"Analyzing {len(numerical_factors)} numerical, "
+            f"{len(categorical_factors)} categorical, "
+            f"{len(boolean_factors)} boolean factors"
+        )
+
         # Prepare data slices for each holding period
         data_by_hp = {}
         for hp in holding_periods:
@@ -273,19 +293,19 @@ class FactorDiscoveryRunner:
                 continue
 
             # Numerical factors
-            for factor_name, config in FactorAnalyzer.NUMERICAL_FACTORS.items():
+            for factor_name, config in numerical_factors.items():
                 tasks.append(
                     ("numerical", factor_name, hp, hp_data, config, min_sample_size)
                 )
 
             # Categorical factors
-            for factor_name, config in FactorAnalyzer.CATEGORICAL_FACTORS.items():
+            for factor_name, config in categorical_factors.items():
                 tasks.append(
                     ("categorical", factor_name, hp, hp_data, config, min_sample_size)
                 )
 
             # Boolean factors
-            for factor_name, config in FactorAnalyzer.BOOLEAN_FACTORS.items():
+            for factor_name, config in boolean_factors.items():
                 tasks.append(
                     ("boolean", factor_name, hp, hp_data, config, min_sample_size)
                 )

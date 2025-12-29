@@ -1,12 +1,139 @@
 """Stock screener API routes."""
 
 import json
+from typing import Any
 
 from fastapi import APIRouter, Query
 
 from src.database.connection import get_db_manager
 
 router = APIRouter()
+
+
+# ============================================================================
+# Raw Factor Filter Helpers
+# ============================================================================
+
+# Map factor names to table aliases and column names
+FACTOR_COLUMN_MAP = {
+    # From key_metrics (km)
+    "pe_ratio": "km.pe_ratio",
+    "pb_ratio": "km.pb_ratio",
+    "price_to_sales": "km.price_to_sales",
+    "price_to_free_cash_flow": "km.price_to_free_cash_flow",
+    "price_to_operating_cash_flow": "km.price_to_operating_cash_flow",
+    "ev_to_sales": "km.ev_to_sales",
+    "ev_to_ebitda": "km.ev_to_ebitda",
+    "ev_to_operating_cash_flow": "km.ev_to_operating_cash_flow",
+    "ev_to_free_cash_flow": "km.ev_to_free_cash_flow",
+    "roe": "km.roe",
+    "roa": "km.roa",
+    "return_on_tangible_assets": "km.return_on_tangible_assets",
+    "gross_profit_margin": "km.gross_profit_margin",
+    "operating_profit_margin": "km.operating_profit_margin",
+    "net_profit_margin": "km.net_profit_margin",
+    "current_ratio": "km.current_ratio",
+    "quick_ratio": "km.quick_ratio",
+    "cash_ratio": "km.cash_ratio",
+    "debt_ratio": "km.debt_ratio",
+    "debt_to_equity": "km.debt_to_equity",
+    "debt_to_assets": "km.debt_to_assets",
+    "net_debt_to_ebitda": "km.net_debt_to_ebitda",
+    "interest_coverage": "km.interest_coverage",
+    "asset_turnover": "km.asset_turnover",
+    "inventory_turnover": "km.inventory_turnover",
+    "receivables_turnover": "km.receivables_turnover",
+    "payables_turnover": "km.payables_turnover",
+    "dividend_yield": "km.dividend_yield",
+    "payout_ratio": "km.payout_ratio",
+    # From roic_quality_results (r) - already joined
+    "roic": "r.roic",
+    "roic_std_dev": "r.roic_std_dev",
+    "gross_margin_std_dev": "r.gross_margin_std_dev",
+    "fcf_to_net_income": "r.fcf_to_net_income",
+    "reinvestment_rate": "r.reinvestment_rate",
+    "fcf_yield": "r.fcf_yield",
+    "ev_to_ebit": "r.ev_to_ebit",
+    # From garp_peg_results (gp) - already joined
+    "eps_growth_1yr": "gp.eps_growth_1yr",
+    "eps_growth_3yr": "gp.eps_growth_3yr",
+    "eps_growth_5yr": "gp.eps_growth_5yr",
+    "eps_cagr": "gp.eps_cagr",
+    "peg_ratio": "gp.peg_ratio",
+    # From other tables - already joined
+    "graham_score": "g.criteria_passed",
+    "piotroski_score": "p.f_score",
+    "magic_formula_rank": "mf.combined_rank",
+    "earnings_yield": "mf.earnings_yield",
+    "return_on_capital": "mf.return_on_capital",
+    "z_score": "a.z_score",
+}
+
+
+def apply_raw_filter(stock: dict[str, Any], factor: str, operator: str, value: float | str) -> bool:
+    """Check if a stock passes a single raw filter.
+
+    Returns True if the stock passes the filter, False otherwise.
+    """
+    # Get the stock's value for this factor
+    stock_value = stock.get(factor)
+
+    # If value is None/null, stock fails the filter
+    if stock_value is None:
+        return False
+
+    # Handle numeric comparisons
+    try:
+        stock_value = float(stock_value)
+        filter_value = float(value)
+    except (TypeError, ValueError):
+        # Non-numeric comparison (e.g., string equality)
+        if operator == "==":
+            return str(stock_value) == str(value)
+        return False
+
+    # Apply the operator
+    if operator == ">=":
+        return stock_value >= filter_value
+    elif operator == "<=":
+        return stock_value <= filter_value
+    elif operator == ">":
+        return stock_value > filter_value
+    elif operator == "<":
+        return stock_value < filter_value
+    elif operator == "==":
+        return stock_value == filter_value
+    elif operator == "!=":
+        return stock_value != filter_value
+
+    return False
+
+
+def apply_raw_filters(stock: dict[str, Any], filters: list[dict]) -> bool:
+    """Apply all raw filters to a stock. Returns True if stock passes ALL filters."""
+    for f in filters:
+        if not apply_raw_filter(stock, f["factor"], f["operator"], f["value"]):
+            return False
+    return True
+
+
+def quarter_to_date(quarter_str: str | None) -> str | None:
+    """Convert quarter string (e.g., '2024Q3') to end-of-quarter date string."""
+    if not quarter_str:
+        return None
+    try:
+        year = int(quarter_str[:4])
+        q = int(quarter_str[5])
+        if q == 1:
+            return f"{year}-03-31"
+        elif q == 2:
+            return f"{year}-06-30"
+        elif q == 3:
+            return f"{year}-09-30"
+        else:  # q == 4
+            return f"{year}-12-31"
+    except (ValueError, IndexError):
+        return None
 
 
 @router.get("/quarters")
@@ -516,6 +643,11 @@ async def screen_pipeline(
         None,
         description="Comma-separated list of quality tags to filter by (e.g. 'Durable Compounder,Cash Machine')",
     ),
+    # Raw factor filters (JSON array from Factor Discovery)
+    raw_filters: str | None = Query(
+        None,
+        description="JSON array of raw factor filters, e.g. [{\"factor\": \"roic\", \"operator\": \">=\", \"value\": 0.12}]",
+    ),
     # Ranking
     rank_by: str = Query(
         "magic-formula",
@@ -577,13 +709,18 @@ async def screen_pipeline(
                         WHEN r.roic >= 0.08 THEN 'average'
                         ELSE 'weak'
                     END as quality_label,
-                    -- NEW: Quality metrics (stability, valuation, tags)
+                    -- Quality metrics (stability, valuation, tags)
                     r.roic_stability_tag,
                     r.gross_margin_stability_tag,
                     r.fcf_yield,
                     r.ev_to_ebit,
                     r.valuation_tag,
                     r.quality_tags,
+                    -- Additional stability/growth metrics for raw filters
+                    r.roic_std_dev,
+                    r.gross_margin_std_dev,
+                    r.fcf_to_net_income,
+                    r.reinvestment_rate,
 
                     -- Stage 3: Valuation lens data
                     g.criteria_passed as graham_score,
@@ -593,6 +730,10 @@ async def screen_pipeline(
                     nn.discount_to_ncav as net_net_discount,
                     gp.peg_ratio,
                     gp.eps_cagr,
+                    -- Additional growth metrics for raw filters
+                    gp.eps_growth_1yr,
+                    gp.eps_growth_3yr,
+                    gp.eps_growth_5yr,
                     mf.combined_rank as magic_formula_rank,
                     mf.earnings_yield,
                     mf.return_on_capital as mf_roic,
@@ -603,7 +744,38 @@ async def screen_pipeline(
                     ff.asset_growth_percentile,
                     ff.book_to_market,
                     ff.profitability,
-                    ff.asset_growth
+                    ff.asset_growth,
+
+                    -- Raw metrics from key_metrics (for raw factor filters)
+                    km.pe_ratio,
+                    km.pb_ratio,
+                    km.price_to_sales,
+                    km.price_to_free_cash_flow,
+                    km.price_to_operating_cash_flow,
+                    km.ev_to_sales,
+                    km.ev_to_ebitda,
+                    km.ev_to_free_cash_flow,
+                    km.ev_to_operating_cash_flow,
+                    km.roe,
+                    km.roa,
+                    km.return_on_tangible_assets,
+                    km.gross_profit_margin,
+                    km.operating_profit_margin,
+                    km.net_profit_margin,
+                    km.current_ratio,
+                    km.quick_ratio,
+                    km.cash_ratio,
+                    km.debt_ratio,
+                    km.debt_to_equity,
+                    km.debt_to_assets,
+                    km.net_debt_to_ebitda,
+                    km.interest_coverage,
+                    km.asset_turnover,
+                    km.inventory_turnover,
+                    km.receivables_turnover,
+                    km.payables_turnover,
+                    km.dividend_yield,
+                    km.payout_ratio
 
                 FROM tickers t
                 LEFT JOIN altman_results a ON t.symbol = a.symbol
@@ -623,6 +795,24 @@ async def screen_pipeline(
                     AND mf.analysis_quarter = (SELECT q FROM latest_quarters WHERE sys = 'magic_formula')
                 LEFT JOIN fama_french_results ff ON t.symbol = ff.symbol
                     AND ff.analysis_quarter = (SELECT q FROM latest_quarters WHERE sys = 'fama_french')
+                -- Key metrics: get the latest data up to the quarter end date
+                LEFT JOIN (
+                    SELECT DISTINCT ON (symbol)
+                        symbol,
+                        pe_ratio, pb_ratio, price_to_sales, price_to_free_cash_flow,
+                        price_to_operating_cash_flow, ev_to_ebitda, ev_to_sales,
+                        ev_to_free_cash_flow, ev_to_operating_cash_flow,
+                        roe, roa, return_on_tangible_assets,
+                        gross_profit_margin, operating_profit_margin, net_profit_margin,
+                        current_ratio, quick_ratio, cash_ratio,
+                        debt_ratio, debt_to_equity, debt_to_assets, net_debt_to_ebitda,
+                        interest_coverage,
+                        asset_turnover, inventory_turnover, receivables_turnover, payables_turnover,
+                        dividend_yield, payout_ratio
+                    FROM key_metrics
+                    WHERE fiscal_date <= COALESCE(?, CURRENT_DATE)
+                    ORDER BY symbol, fiscal_date DESC
+                ) km ON t.symbol = km.symbol
                 WHERE t.is_active = TRUE
             ),
             scored AS (
@@ -703,6 +893,7 @@ async def screen_pipeline(
                 quarter,  # fama_french
                 quarter,  # net_net
                 graham_mode,  # For graham join
+                quarter_to_date(quarter),  # For key_metrics join (fiscal_date <= quarter_end)
                 altman_zone,  # Altman zone threshold (for distress check)
                 altman_zone,  # Altman zone threshold (for grey check)
                 piotroski_min,  # Piotroski threshold
@@ -744,6 +935,14 @@ async def screen_pipeline(
         if quality_tags_filter:
             filter_tags = set(t.strip() for t in quality_tags_filter.split(",") if t.strip())
 
+        # Parse raw factor filters if provided
+        parsed_raw_filters: list[dict] = []
+        if raw_filters:
+            try:
+                parsed_raw_filters = json.loads(raw_filters)
+            except json.JSONDecodeError:
+                pass  # Invalid JSON, ignore raw filters
+
         # All possible quality tags
         ALL_QUALITY_TAGS = {
             "Durable Compounder", "Cash Machine", "Deep Value", "Heavy Reinvestor",
@@ -772,6 +971,10 @@ async def screen_pipeline(
                 # Check if stock has at least one of the selected tags
                 if not (stock_tags & filter_tags):
                     continue
+
+            # Apply raw factor filters if specified
+            if parsed_raw_filters and not apply_raw_filters(stock, parsed_raw_filters):
+                continue
 
             # Build valuation lenses passed list
             lenses = []
@@ -812,6 +1015,7 @@ async def screen_pipeline(
                         "fama_french_bm": {"enabled": lens_fama_french_bm, "top_pct": ff_bm_top_pct},
                     },
                 },
+                "raw_filters": parsed_raw_filters,
                 "rank_by": rank_by,
             },
             "count": len(stocks),
