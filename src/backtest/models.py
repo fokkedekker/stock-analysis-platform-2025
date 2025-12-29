@@ -10,7 +10,7 @@ class SurvivalConfig(BaseModel):
     """Survival gate configuration."""
 
     altman_enabled: bool = True
-    altman_zone: Literal["safe", "grey"] = "safe"
+    altman_zone: Literal["safe", "grey", "distress"] = "safe"
     piotroski_enabled: bool = True
     piotroski_min: int = Field(default=5, ge=0, le=9)
 
@@ -168,7 +168,7 @@ class GridSearchResult(BaseModel):
 # Constants for available dimensions
 AVAILABLE_DIMENSIONS = {
     # Survival
-    "altman_zone": ["safe", "grey"],
+    "altman_zone": ["safe", "grey", "distress"],
     "piotroski_min": [3, 4, 5, 6, 7, 8, 9],
     # Quality
     "quality_enabled": [True, False],

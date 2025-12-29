@@ -68,7 +68,7 @@ function GridSearchBuilder({
 }) {
   // Base strategy state - matches Pipeline page
   const [requireAltman, setRequireAltman] = useState(true);
-  const [altmanZone, setAltmanZone] = useState<"safe" | "grey">("safe");
+  const [altmanZone, setAltmanZone] = useState<"safe" | "grey" | "distress">("safe");
   const [requirePiotroski, setRequirePiotroski] = useState(true);
   const [piotroskiMin, setPiotroskiMin] = useState(6);
 

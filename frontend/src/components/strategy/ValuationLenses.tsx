@@ -253,7 +253,7 @@ export function ValuationLenses({
                 onChange={(e) => setMfTopPct(Number(e.target.value))}
                 className="w-full text-xs rounded border-gray-300 dark:border-gray-700 dark:bg-gray-800"
               >
-                {[10, 20, 30, 50].map((n) => (
+                {[10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map((n) => (
                   <option key={n} value={n}>
                     Top {n}%
                   </option>
@@ -289,7 +289,7 @@ export function ValuationLenses({
                 onChange={(e) => setFfBmTopPct(Number(e.target.value))}
                 className="w-full text-xs rounded border-gray-300 dark:border-gray-700 dark:bg-gray-800"
               >
-                {[20, 30, 40, 50].map((n) => (
+                {[10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map((n) => (
                   <option key={n} value={n}>
                     Top {n}%
                   </option>

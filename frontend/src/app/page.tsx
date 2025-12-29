@@ -14,9 +14,16 @@ import {
   ValuationLens,
   QualityLabel,
   QualityTag,
+  QUALITY_TAGS,
   formatNumber,
   formatPercent,
 } from "@/lib/api"
+import {
+  loadStrategies,
+  SavedStrategy,
+  deleteStrategy,
+  formatStrategyDate,
+} from "@/lib/saved-strategies"
 import { SurvivalGates } from "@/components/strategy/SurvivalGates"
 import { QualityClassification } from "@/components/strategy/QualityClassification"
 import { ValuationLenses, GrahamMode } from "@/components/strategy/ValuationLenses"
@@ -185,7 +192,7 @@ export default function PipelinePage() {
 
   // Stage 1: Survival
   const [requireAltman, setRequireAltman] = useState(true)
-  const [altmanZone, setAltmanZone] = useState<"safe" | "grey">("safe")
+  const [altmanZone, setAltmanZone] = useState<"safe" | "grey" | "distress">("safe")
   const [requirePiotroski, setRequirePiotroski] = useState(true)
   const [piotroskiMin, setPiotroskiMin] = useState(6)
 
@@ -213,6 +220,10 @@ export default function PipelinePage() {
 
   // Advanced toggle
   const [showAdvanced, setShowAdvanced] = useState(true)
+
+  // Saved strategies
+  const [savedStrategies, setSavedStrategies] = useState<SavedStrategy[]>([])
+  const [selectedStrategyId, setSelectedStrategyId] = useState<string | null>(null)
 
   const fetchData = useCallback(async () => {
     try {
@@ -277,6 +288,88 @@ export default function PipelinePage() {
     fetchData()
   }, [fetchData])
 
+  // Load saved strategies on mount (client-side only)
+  useEffect(() => {
+    setSavedStrategies(loadStrategies())
+  }, [])
+
+  // Apply a saved strategy to all filters
+  const applyStrategy = (strategy: SavedStrategy) => {
+    const s = strategy.settings
+    if (!s) return
+
+    // Survival gates
+    setRequirePiotroski(s.piotroski_enabled ?? false)
+    setPiotroskiMin(s.piotroski_min ?? 6)
+    setRequireAltman(s.altman_enabled ?? false)
+    setAltmanZone((s.altman_zone as "safe" | "grey" | "distress") ?? "safe")
+
+    // Quality
+    setQualityFilter(s.quality_enabled ?? false)
+    setMinQuality((s.min_quality as QualityLabel) ?? "compounder")
+
+    // Build tag set from required tags only
+    const tagSet = new Set<QualityTag>()
+    if (s.required_tags && Array.isArray(s.required_tags)) {
+      s.required_tags.forEach(tag => {
+        if (QUALITY_TAGS.includes(tag as QualityTag)) {
+          tagSet.add(tag as QualityTag)
+        }
+      })
+    }
+    setSelectedTags(tagSet)
+
+    // Valuation lenses
+    setLensGraham(s.graham_enabled ?? false)
+    setGrahamMode((s.graham_mode as GrahamMode) ?? "strict")
+    setGrahamMin(s.graham_min ?? 8)
+    setLensMagicFormula(s.magic_formula_enabled ?? false)
+    setMfTopPct(s.mf_top_pct ?? 20)
+    setLensPeg(s.peg_enabled ?? false)
+    setMaxPeg(s.max_peg ?? 1.5)
+    setLensNetNet(s.net_net_enabled ?? false)
+    setLensFamaFrenchBm(s.fama_french_enabled ?? false)
+    setFfBmTopPct(s.ff_top_pct ?? 30)
+    setMinLenses(s.min_lenses ?? 3)
+    setStrictMode(s.strict_mode ?? false)
+
+    setSelectedStrategyId(strategy.id)
+  }
+
+  // Clear strategy and reset to defaults
+  const clearStrategy = () => {
+    setSelectedStrategyId(null)
+    // Reset to defaults
+    setRequireAltman(true)
+    setAltmanZone("safe")
+    setRequirePiotroski(true)
+    setPiotroskiMin(6)
+    setQualityFilter(true)
+    setMinQuality("compounder")
+    setSelectedTags(new Set())
+    setMinLenses(3)
+    setStrictMode(false)
+    setLensGraham(true)
+    setLensNetNet(true)
+    setLensPeg(true)
+    setLensMagicFormula(true)
+    setLensFamaFrenchBm(true)
+    setGrahamMode("strict")
+    setGrahamMin(8)
+    setMaxPeg(1.5)
+    setMfTopPct(20)
+    setFfBmTopPct(30)
+  }
+
+  // Delete a saved strategy
+  const handleDeleteStrategy = (id: string) => {
+    deleteStrategy(id)
+    setSavedStrategies(loadStrategies())
+    if (selectedStrategyId === id) {
+      setSelectedStrategyId(null)
+    }
+  }
+
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1)
@@ -323,6 +416,78 @@ export default function PipelinePage() {
           Filter stocks through survival gates, classify quality, and find buy candidates via valuation lenses
         </p>
       </div>
+
+      {/* Saved Strategy Selector */}
+      {savedStrategies.length > 0 && (
+        <div className="mb-6 p-4 bg-indigo-50 dark:bg-indigo-950/50 rounded-lg border border-indigo-200 dark:border-indigo-800">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-indigo-700 dark:text-indigo-300">
+                Load Strategy:
+              </span>
+              <select
+                value={selectedStrategyId || ""}
+                onChange={(e) => {
+                  const strategy = savedStrategies.find(s => s.id === e.target.value)
+                  if (strategy) applyStrategy(strategy)
+                }}
+                className="text-sm rounded-lg border-indigo-300 dark:border-indigo-700 dark:bg-gray-800 focus:ring-indigo-500"
+              >
+                <option value="">Select saved strategy...</option>
+                {savedStrategies.map((strategy) => (
+                  <option key={strategy.id} value={strategy.id}>
+                    {strategy.name} (Alpha: {strategy.expected_alpha.toFixed(1)}%)
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              {selectedStrategyId && (
+                <>
+                  <span className="text-xs text-indigo-600 dark:text-indigo-400">
+                    {(() => {
+                      const s = savedStrategies.find(s => s.id === selectedStrategyId)
+                      return s ? `${s.holding_period}Q hold • ${formatStrategyDate(s.created_at)}` : ""
+                    })()}
+                  </span>
+                  <button
+                    onClick={clearStrategy}
+                    className="text-sm px-3 py-1 rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (selectedStrategyId && confirm("Delete this strategy?")) {
+                        handleDeleteStrategy(selectedStrategyId)
+                      }
+                    }}
+                    className="text-sm px-3 py-1 rounded bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800"
+                  >
+                    Delete
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+          {selectedStrategyId && (
+            <div className="mt-2 text-xs text-indigo-600 dark:text-indigo-400">
+              {(() => {
+                const s = savedStrategies.find(s => s.id === selectedStrategyId)
+                if (!s) return null
+                return (
+                  <span>
+                    Expected Alpha: {s.expected_alpha.toFixed(1)}%
+                    (95% CI: {s.expected_alpha_ci_lower.toFixed(1)}% to {s.expected_alpha_ci_upper.toFixed(1)}%)
+                    • Win Rate: {s.win_rate.toFixed(0)}%
+                    • Sample: {s.sample_size.toLocaleString()} stocks
+                  </span>
+                )
+              })()}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Stage 1: Survival Gates */}
       <SurvivalGates

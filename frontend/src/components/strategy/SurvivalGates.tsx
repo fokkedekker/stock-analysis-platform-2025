@@ -8,8 +8,8 @@ import {
 export interface SurvivalGatesProps {
   requireAltman: boolean
   setRequireAltman: (v: boolean) => void
-  altmanZone: "safe" | "grey"
-  setAltmanZone: (v: "safe" | "grey") => void
+  altmanZone: "safe" | "grey" | "distress"
+  setAltmanZone: (v: "safe" | "grey" | "distress") => void
   requirePiotroski: boolean
   setRequirePiotroski: (v: boolean) => void
   piotroskiMin: number
@@ -57,12 +57,13 @@ export function SurvivalGates({
           </div>
           <select
             value={altmanZone}
-            onChange={(e) => setAltmanZone(e.target.value as "safe" | "grey")}
+            onChange={(e) => setAltmanZone(e.target.value as "safe" | "grey" | "distress")}
             disabled={!requireAltman}
             className="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800 disabled:opacity-50"
           >
             <option value="safe">Safe zone only</option>
             <option value="grey">Include grey zone</option>
+            <option value="distress">Include distress</option>
           </select>
         </div>
         {/* Piotroski */}
@@ -88,7 +89,7 @@ export function SurvivalGates({
             disabled={!requirePiotroski}
             className="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800 disabled:opacity-50"
           >
-            {[3, 4, 5, 6, 7, 8].map((n) => (
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
               <option key={n} value={n}>
                 Min {n}/9
               </option>

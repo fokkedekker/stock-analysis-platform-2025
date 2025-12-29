@@ -219,7 +219,7 @@ export interface PipelineResponse {
 export interface PipelineParams {
   // Stage 1
   require_altman?: boolean;
-  altman_zone?: 'safe' | 'grey';
+  altman_zone?: 'safe' | 'grey' | 'distress';
   require_piotroski?: boolean;
   piotroski_min?: number;
   // Stage 2

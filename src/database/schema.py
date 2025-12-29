@@ -550,6 +550,89 @@ CREATE TABLE IF NOT EXISTS grid_searches (
 )
 """
 
+# ============================================================================
+# Factor Discovery Tables
+# ============================================================================
+
+# Run metadata table
+FACTOR_ANALYSIS_RUNS_TABLE = """
+CREATE TABLE IF NOT EXISTS factor_analysis_runs (
+    id VARCHAR PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    status VARCHAR NOT NULL DEFAULT 'running',
+    quarters_analyzed JSON,
+    holding_periods JSON,
+    total_observations INTEGER,
+    config JSON,
+    error_message VARCHAR,
+    duration_seconds DECIMAL
+)
+"""
+
+# Individual factor results
+FACTOR_RESULTS_TABLE = """
+CREATE TABLE IF NOT EXISTS factor_results (
+    run_id VARCHAR NOT NULL,
+    holding_period INTEGER NOT NULL,
+    factor_name VARCHAR NOT NULL,
+    factor_type VARCHAR NOT NULL,
+    -- Overall stats
+    correlation DOUBLE,
+    correlation_pvalue DOUBLE,
+    -- Threshold analysis (JSON array)
+    threshold_results JSON,
+    -- Best threshold
+    best_threshold VARCHAR,
+    best_threshold_alpha DOUBLE,
+    best_threshold_lift DOUBLE,
+    best_threshold_pvalue DOUBLE,
+    best_threshold_sample_size INTEGER,
+    best_threshold_ci_lower DOUBLE,
+    best_threshold_ci_upper DOUBLE,
+    PRIMARY KEY (run_id, holding_period, factor_name)
+)
+"""
+
+# Combined strategy results
+COMBINED_STRATEGY_RESULTS_TABLE = """
+CREATE TABLE IF NOT EXISTS combined_strategy_results (
+    run_id VARCHAR NOT NULL,
+    holding_period INTEGER NOT NULL,
+    strategy_rank INTEGER NOT NULL,
+    -- Strategy definition
+    filters JSON,
+    -- Performance
+    mean_alpha DOUBLE,
+    sample_size INTEGER,
+    lift DOUBLE,
+    win_rate DOUBLE,
+    ci_lower DOUBLE,
+    ci_upper DOUBLE,
+    PRIMARY KEY (run_id, holding_period, strategy_rank)
+)
+"""
+
+# Recommended strategies (one per run per holding period)
+RECOMMENDED_STRATEGIES_TABLE = """
+CREATE TABLE IF NOT EXISTS recommended_strategies (
+    run_id VARCHAR NOT NULL,
+    holding_period INTEGER NOT NULL,
+    -- Pipeline-ready settings
+    pipeline_settings JSON,
+    -- Expected performance
+    expected_alpha DOUBLE,
+    expected_alpha_ci_lower DOUBLE,
+    expected_alpha_ci_upper DOUBLE,
+    expected_win_rate DOUBLE,
+    sample_size INTEGER,
+    confidence_score DOUBLE,
+    -- Explanation
+    key_factors JSON,
+    PRIMARY KEY (run_id, holding_period)
+)
+"""
+
 ALL_TABLES = [
     ("tickers", TICKERS_TABLE),
     ("company_profiles", COMPANY_PROFILES_TABLE),
@@ -570,6 +653,11 @@ ALL_TABLES = [
     ("fetch_log", FETCH_LOG_TABLE),
     ("spy_prices", SPY_PRICES_TABLE),
     ("grid_searches", GRID_SEARCHES_TABLE),
+    # Factor Discovery tables
+    ("factor_analysis_runs", FACTOR_ANALYSIS_RUNS_TABLE),
+    ("factor_results", FACTOR_RESULTS_TABLE),
+    ("combined_strategy_results", COMBINED_STRATEGY_RESULTS_TABLE),
+    ("recommended_strategies", RECOMMENDED_STRATEGIES_TABLE),
 ]
 
 # Performance indexes for analysis queries

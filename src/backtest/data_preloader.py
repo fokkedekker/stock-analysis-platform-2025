@@ -314,12 +314,14 @@ class SimulationDataPreloader:
         # Stage 1: Survival Gates
         if strategy.survival.altman_enabled:
             zone = data.get("altman_zone")
+            # distress = allow all, grey = allow safe+grey, safe = allow safe only
             if strategy.survival.altman_zone == "safe":
                 if zone != "safe":
                     return False
-            else:  # grey
+            elif strategy.survival.altman_zone == "grey":
                 if zone not in ("safe", "grey"):
                     return False
+            # distress: allow all zones (no filtering)
 
         if strategy.survival.piotroski_enabled:
             score = data.get("piotroski_score")

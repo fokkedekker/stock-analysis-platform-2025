@@ -13,7 +13,7 @@ export interface GridDimension {
 
 export interface SurvivalConfig {
   altman_enabled: boolean;
-  altman_zone: 'safe' | 'grey';
+  altman_zone: 'safe' | 'grey' | 'distress';
   piotroski_enabled: boolean;
   piotroski_min: number;
 }

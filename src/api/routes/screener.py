@@ -490,7 +490,7 @@ async def screen_rankings(
 async def screen_pipeline(
     # Stage 1: Survival (hard gates, ON by default)
     require_altman: bool = Query(True, description="Require Altman Z-Score gate"),
-    altman_zone: str = Query("safe", regex="^(safe|grey)$", description="Minimum Altman zone"),
+    altman_zone: str = Query("safe", regex="^(safe|grey|distress)$", description="Minimum Altman zone"),
     require_piotroski: bool = Query(True, description="Require Piotroski F-Score gate"),
     piotroski_min: int = Query(5, ge=0, le=9, description="Minimum Piotroski F-Score"),
     # Stage 2: Quality (classification, filtering optional)
@@ -628,9 +628,11 @@ async def screen_pipeline(
             scored AS (
                 SELECT *,
                     -- Survival gate results
+                    -- distress = allow all, grey = allow safe+grey, safe = allow safe only
                     CASE
+                        WHEN ? = 'distress' THEN TRUE
                         WHEN altman_zone = 'safe' THEN TRUE
-                        WHEN altman_zone = 'grey' AND ? = 'grey' THEN TRUE
+                        WHEN altman_zone = 'grey' AND ? IN ('grey', 'distress') THEN TRUE
                         ELSE FALSE
                     END as altman_passed,
                     CASE WHEN piotroski_score >= ? THEN TRUE ELSE FALSE END as piotroski_passed,
@@ -701,7 +703,8 @@ async def screen_pipeline(
                 quarter,  # fama_french
                 quarter,  # net_net
                 graham_mode,  # For graham join
-                altman_zone,  # Altman zone threshold
+                altman_zone,  # Altman zone threshold (for distress check)
+                altman_zone,  # Altman zone threshold (for grey check)
                 piotroski_min,  # Piotroski threshold
                 graham_min,  # Graham min score
                 max_peg,  # PEG max

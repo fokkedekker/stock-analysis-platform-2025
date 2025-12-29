@@ -11,6 +11,7 @@ import {
   RiMoonLine,
   RiPercentLine,
   RiScales3Line,
+  RiSearchEyeLine,
   RiShieldCheckLine,
   RiSparklingLine,
   RiStackLine,
@@ -26,6 +27,7 @@ import MobileSidebar from "./MobileSidebar"
 const navigation = [
   { name: "Pipeline", href: siteConfig.baseLinks.home, icon: RiFilter3Line },
   { name: "Simulations", href: siteConfig.baseLinks.gridSearch, icon: RiFlaskLine },
+  { name: "Factor Discovery", href: siteConfig.baseLinks.factorDiscovery, icon: RiSearchEyeLine },
 ] as const
 
 // Grouped by pipeline stage

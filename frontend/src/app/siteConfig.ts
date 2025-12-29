@@ -5,6 +5,7 @@ export const siteConfig = {
   baseLinks: {
     home: "/",
     gridSearch: "/grid-search",
+    factorDiscovery: "/factor-discovery",
     graham: "/screeners/graham",
     magicFormula: "/screeners/magic-formula",
     piotroski: "/screeners/piotroski",
