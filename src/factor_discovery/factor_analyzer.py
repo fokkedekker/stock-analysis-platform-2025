@@ -7,6 +7,7 @@ Implements statistical methods:
 - Welch's t-test
 - Bootstrap confidence intervals
 - Chi-squared test (for categorical)
+- Benjamini-Hochberg FDR correction for multiple hypothesis testing
 """
 
 import logging
@@ -52,6 +53,125 @@ def bootstrap_ci(
     upper = np.percentile(means, (1 + ci) / 2 * 100)
 
     return float(lower), float(upper)
+
+
+def apply_fdr_correction(
+    factor_results: list[FactorResult],
+    alpha: float = 0.05,
+) -> list[FactorResult]:
+    """
+    Apply Benjamini-Hochberg FDR correction across ALL threshold tests.
+
+    This corrects for multiple hypothesis testing. When testing 50 factors
+    with 5 thresholds each = 250 tests, at p=0.05 you'd expect ~12 false
+    positives by chance. FDR correction reduces this false positive rate.
+
+    Args:
+        factor_results: List of FactorResult from all factors analyzed
+        alpha: Significance level (default 0.05)
+
+    Returns:
+        Updated factor_results with fdr_significant and adjusted_pvalue set
+    """
+    # Collect all p-values with their locations
+    pvalue_locations: list[tuple[int, int, float]] = []  # (factor_idx, threshold_idx, pvalue)
+
+    for f_idx, factor in enumerate(factor_results):
+        for t_idx, threshold in enumerate(factor.threshold_results):
+            if threshold.pvalue is not None:
+                pvalue_locations.append((f_idx, t_idx, threshold.pvalue))
+
+    if not pvalue_locations:
+        return factor_results
+
+    # Sort by p-value (ascending) for BH procedure
+    pvalue_locations.sort(key=lambda x: x[2])
+
+    n_tests = len(pvalue_locations)
+    logger.info(f"Applying FDR correction to {n_tests} hypothesis tests")
+
+    # Benjamini-Hochberg procedure:
+    # For sorted p-values p(1) <= p(2) <= ... <= p(n)
+    # Find largest k where p(k) <= (k/n) * alpha
+    # Reject all hypotheses with p-value <= p(k)
+
+    # Calculate BH critical values and adjusted p-values
+    rejection_threshold = 0.0
+    for rank, (f_idx, t_idx, pvalue) in enumerate(pvalue_locations, start=1):
+        # BH critical value for this rank
+        bh_critical = (rank / n_tests) * alpha
+
+        # BH-adjusted p-value: p_adj = p * n / rank (capped at 1.0)
+        adjusted_pvalue = min(pvalue * n_tests / rank, 1.0)
+
+        # Update the threshold result
+        threshold_result = factor_results[f_idx].threshold_results[t_idx]
+        threshold_result.adjusted_pvalue = round(adjusted_pvalue, 6)
+
+        # Track the largest p-value that passes BH criterion
+        if pvalue <= bh_critical:
+            rejection_threshold = pvalue
+
+    # Now mark all with p-value <= rejection_threshold as significant
+    n_significant = 0
+    for f_idx, t_idx, pvalue in pvalue_locations:
+        threshold_result = factor_results[f_idx].threshold_results[t_idx]
+        threshold_result.fdr_significant = pvalue <= rejection_threshold
+        if threshold_result.fdr_significant:
+            n_significant += 1
+
+    logger.info(
+        f"FDR correction: {n_significant}/{n_tests} tests significant "
+        f"at alpha={alpha} (rejection threshold p={rejection_threshold:.6f})"
+    )
+
+    return factor_results
+
+
+def reselect_best_thresholds(
+    factor_results: list[FactorResult],
+    use_fdr: bool = True,
+) -> list[FactorResult]:
+    """
+    Re-select the best threshold for each factor after FDR correction.
+
+    Args:
+        factor_results: List of FactorResult with FDR correction applied
+        use_fdr: If True, use fdr_significant; if False, use raw p-value < 0.05
+
+    Returns:
+        Updated factor_results with best_threshold fields updated
+    """
+    for factor in factor_results:
+        if not factor.threshold_results:
+            continue
+
+        # Find best threshold among significant ones
+        if use_fdr:
+            valid_results = [r for r in factor.threshold_results if r.fdr_significant]
+        else:
+            valid_results = [r for r in factor.threshold_results if r.pvalue < 0.05]
+
+        if valid_results:
+            best = max(valid_results, key=lambda r: r.mean_alpha)
+        elif factor.threshold_results:
+            # Fall back to best by alpha if none significant
+            best = max(factor.threshold_results, key=lambda r: r.mean_alpha)
+        else:
+            best = None
+
+        # Update factor's best threshold fields
+        if best:
+            factor.best_threshold = best.threshold
+            factor.best_threshold_alpha = best.mean_alpha
+            factor.best_threshold_lift = best.lift
+            factor.best_threshold_pvalue = best.pvalue
+            factor.best_threshold_sample_size = best.sample_size
+            factor.best_threshold_ci_lower = best.ci_lower
+            factor.best_threshold_ci_upper = best.ci_upper
+            factor.best_threshold_fdr_significant = best.fdr_significant
+
+    return factor_results
 
 
 class FactorAnalyzer:
@@ -853,6 +973,8 @@ class FactorAnalyzer:
         data: list[dict],
         holding_period: int,
         min_sample_size: int = 100,
+        apply_fdr: bool = True,
+        fdr_alpha: float = 0.05,
     ) -> list[FactorResult]:
         """
         Analyze all configured factors.
@@ -861,6 +983,8 @@ class FactorAnalyzer:
             data: List of observation dicts
             holding_period: Holding period for this analysis
             min_sample_size: Minimum sample size
+            apply_fdr: Whether to apply FDR correction for multiple testing
+            fdr_alpha: Significance level for FDR correction
 
         Returns:
             List of FactorResult for all factors
@@ -900,5 +1024,10 @@ class FactorAnalyzer:
                 holding_period=holding_period,
             )
             results.append(result)
+
+        # Apply FDR correction across ALL threshold tests
+        if apply_fdr and results:
+            results = apply_fdr_correction(results, alpha=fdr_alpha)
+            results = reselect_best_thresholds(results, use_fdr=True)
 
         return results

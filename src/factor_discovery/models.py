@@ -101,6 +101,21 @@ class FactorDiscoveryRequest(BaseModel):
         ],
         description="Factor categories to analyze (e.g., scores, raw_valuation, raw_profitability)",
     )
+    # Out-of-sample validation settings
+    train_end_quarter: str | None = Field(
+        default=None,
+        description="Last quarter for training set (e.g., '2022Q4'). If None, uses all data.",
+    )
+    validation_end_quarter: str | None = Field(
+        default=None,
+        description="Last quarter for validation set (e.g., '2023Q4'). Test set is everything after.",
+    )
+    data_lag_quarters: int = Field(
+        default=1,
+        ge=0,
+        le=4,
+        description="Quarters to lag analysis data (1 = use Q1 data for Q2 decisions, prevents look-ahead bias)",
+    )
 
 
 class PortfolioStats(BaseModel):
@@ -133,6 +148,15 @@ class ThresholdResult(BaseModel):
     win_rate: float = Field(
         default=0.0,
         description="Percentage of stocks with positive alpha",
+    )
+    # FDR-corrected significance (Benjamini-Hochberg)
+    fdr_significant: bool = Field(
+        default=False,
+        description="Whether significant after FDR correction (Benjamini-Hochberg)",
+    )
+    adjusted_pvalue: float | None = Field(
+        default=None,
+        description="FDR-adjusted p-value (Benjamini-Hochberg)",
     )
 
 
@@ -191,6 +215,10 @@ class FactorResult(BaseModel):
         default=None,
         description="CI upper at best threshold",
     )
+    best_threshold_fdr_significant: Optional[bool] = Field(
+        default=None,
+        description="Whether best threshold is FDR-significant",
+    )
 
 
 class FilterSpec(BaseModel):
@@ -218,6 +246,35 @@ class CombinedStrategyResult(BaseModel):
     portfolio_stats: dict[int, PortfolioStats] = Field(
         default_factory=dict,
         description="Stats for each portfolio size: {20: PortfolioStats, 50: ...}",
+    )
+    # Out-of-sample metrics (only populated if train/validation splits used)
+    train_alpha: float | None = Field(
+        default=None,
+        description="Average alpha on training set",
+    )
+    train_sample_size: int | None = Field(
+        default=None,
+        description="Sample size in training set",
+    )
+    validation_alpha: float | None = Field(
+        default=None,
+        description="Average alpha on validation set",
+    )
+    validation_sample_size: int | None = Field(
+        default=None,
+        description="Sample size in validation set",
+    )
+    test_alpha: float | None = Field(
+        default=None,
+        description="Average alpha on test set",
+    )
+    test_sample_size: int | None = Field(
+        default=None,
+        description="Sample size in test set",
+    )
+    overfit_ratio: float | None = Field(
+        default=None,
+        description="validation_alpha / train_alpha - values < 0.5 indicate overfitting",
     )
 
 

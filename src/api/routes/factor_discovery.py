@@ -143,6 +143,7 @@ async def get_progress(run_id: str):
 
     async def event_generator():
         last_progress = -1.0
+        last_phase = ""
 
         while True:
             if run_id not in _running_analyses:
@@ -157,17 +158,19 @@ async def get_progress(run_id: str):
 
             info = _running_analyses[run_id]
             current_progress = info.get("progress", 0.0)
+            current_phase = info.get("phase", "")
 
-            # Only send update if progress changed
-            if current_progress != last_progress:
+            # Send update if progress OR phase changed
+            if current_progress != last_progress or current_phase != last_phase:
                 last_progress = current_progress
+                last_phase = current_phase
                 yield f"data: {json.dumps(info)}\n\n"
 
             # Check if complete
             if info.get("status") in ("completed", "failed", "cancelled"):
                 break
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)  # Slightly faster polling
 
     return StreamingResponse(
         event_generator(),

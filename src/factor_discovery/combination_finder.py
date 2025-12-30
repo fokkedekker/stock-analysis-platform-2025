@@ -360,7 +360,7 @@ class CombinationFinder:
 
         Criteria:
         - Must have a best threshold defined
-        - P-value must be below significance level
+        - Must be FDR-significant (Benjamini-Hochberg corrected)
         - Sorted by lift (descending)
 
         Args:
@@ -369,14 +369,23 @@ class CombinationFinder:
         Returns:
             List of top FactorResult objects
         """
-        # Filter for significant factors with valid thresholds
+        # Filter for FDR-significant factors with valid thresholds
+        # Prefer FDR-significant, fall back to raw p-value if FDR not available
         significant_factors = [
             f
             for f in self.factor_results
             if f.best_threshold is not None
-            and f.best_threshold_pvalue is not None
-            and f.best_threshold_pvalue < self.significance_level
             and f.best_threshold_lift is not None
+            and (
+                # Check FDR significance if available
+                f.best_threshold_fdr_significant is True
+                or (
+                    # Fall back to raw p-value if FDR not computed
+                    f.best_threshold_fdr_significant is None
+                    and f.best_threshold_pvalue is not None
+                    and f.best_threshold_pvalue < self.significance_level
+                )
+            )
         ]
 
         # Sort by lift (descending)

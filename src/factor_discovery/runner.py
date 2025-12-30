@@ -11,9 +11,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Callable, Optional
 
+import numpy as np
+
 from .combination_finder import CombinationFinder
-from .dataset_builder import DatasetBuilder
-from .factor_analyzer import FactorAnalyzer
+from .dataset_builder import DatasetBuilder, split_data_by_quarters
+from .factor_analyzer import FactorAnalyzer, apply_fdr_correction, reselect_best_thresholds
 from .models import (
     CombinedStrategyResult,
     FactorDiscoveryProgress,
@@ -144,10 +146,32 @@ class FactorDiscoveryRunner:
             if self._is_cancelled():
                 return self._cancelled_result(run_id, created_at, request)
 
-            # Phase 2: Analyze individual factors (parallel)
+            # Phase 1.5: Split data into train/validation/test if temporal splits specified
+            all_data = dataset["data"]
+            train_data, validation_data, test_data = split_data_by_quarters(
+                all_data,
+                train_end_quarter=request.train_end_quarter,
+                validation_end_quarter=request.validation_end_quarter,
+            )
+
+            # Use training data for factor analysis and combination finding
+            # If no split specified, train_data equals all_data
+            analysis_dataset = {
+                "data": train_data,
+                "metadata": dataset["metadata"],
+            }
+
+            using_oos = len(validation_data) > 0 or len(test_data) > 0
+            if using_oos:
+                logger.info(
+                    f"Using temporal split: train={len(train_data)}, "
+                    f"validation={len(validation_data)}, test={len(test_data)}"
+                )
+
+            # Phase 2: Analyze individual factors (parallel) - ON TRAINING DATA ONLY
             self._report_progress(run_id, "analyzing_factors", 0.0)
             factor_results = self._analyze_factors_parallel(
-                dataset=dataset,
+                dataset=analysis_dataset,
                 holding_periods=request.holding_periods,
                 min_sample_size=request.min_sample_size,
                 factor_categories=request.factor_categories,
@@ -157,10 +181,10 @@ class FactorDiscoveryRunner:
             if self._is_cancelled():
                 return self._cancelled_result(run_id, created_at, request)
 
-            # Phase 3: Find combinations (per holding period)
+            # Phase 3: Find combinations (per holding period) - ON TRAINING DATA ONLY
             self._report_progress(run_id, "finding_combinations", 0.0)
             combined_results = self._find_combinations(
-                dataset=dataset,
+                dataset=analysis_dataset,
                 factor_results=factor_results,
                 holding_periods=request.holding_periods,
                 min_sample_size=request.min_sample_size,
@@ -173,6 +197,27 @@ class FactorDiscoveryRunner:
 
             if self._is_cancelled():
                 return self._cancelled_result(run_id, created_at, request)
+
+            # Phase 3.5: Evaluate combinations on validation/test sets
+            if using_oos:
+                self._report_progress(run_id, "evaluating_oos", 0.0)
+                combined_results = self._add_oos_metrics_to_combinations(
+                    combined_results,
+                    train_data=train_data,
+                    validation_data=validation_data,
+                    test_data=test_data,
+                )
+                self._report_progress(run_id, "evaluating_oos", 1.0)
+
+                # Log OOS results for top combinations
+                for hp, combos in combined_results.items():
+                    if combos:
+                        top = combos[0]
+                        logger.info(
+                            f"HP {hp}Q top strategy: "
+                            f"train={top.train_alpha}%, val={top.validation_alpha}%, "
+                            f"test={top.test_alpha}%, overfit_ratio={top.overfit_ratio}"
+                        )
 
             # Phase 4: Generate recommendations
             self._report_progress(run_id, "generating_recommendations", 0.0)
@@ -234,6 +279,7 @@ class FactorDiscoveryRunner:
             quarters=request.quarters,
             holding_periods=request.holding_periods,
             exclusions=exclusions,
+            data_lag_quarters=request.data_lag_quarters,
         )
         return builder.build()
 
@@ -446,6 +492,125 @@ class FactorDiscoveryRunner:
                 best_alpha = strategy.expected_alpha
 
         return best_hp, best_alpha
+
+    def _evaluate_on_dataset(
+        self,
+        combinations: list[CombinedStrategyResult],
+        eval_data: list[dict],
+    ) -> list[tuple[float, int]]:
+        """
+        Evaluate combinations on a separate dataset (validation/test).
+
+        Args:
+            combinations: List of CombinedStrategyResult from training
+            eval_data: Evaluation dataset
+
+        Returns:
+            List of (mean_alpha, sample_size) for each combination
+        """
+        results = []
+
+        for combo in combinations:
+            # Apply the combination's filters to eval_data
+            filtered = eval_data
+            for f in combo.filters:
+                filtered = [
+                    d for d in filtered
+                    if self._passes_filter(d, f.factor, f.operator, f.value)
+                ]
+
+            if not filtered:
+                results.append((None, 0))
+                continue
+
+            alphas = [d["alpha"] for d in filtered]
+            mean_alpha = float(np.mean(alphas))
+            results.append((round(mean_alpha, 4), len(filtered)))
+
+        return results
+
+    def _passes_filter(
+        self,
+        observation: dict,
+        factor: str,
+        operator: str,
+        value: Any,
+    ) -> bool:
+        """Check if observation passes a filter."""
+        obs_value = observation.get(factor)
+
+        if obs_value is None:
+            return False
+
+        if operator == ">=":
+            return obs_value >= value
+        elif operator == "<=":
+            return obs_value <= value
+        elif operator == ">":
+            return obs_value > value
+        elif operator == "<":
+            return obs_value < value
+        elif operator == "==":
+            return obs_value == value
+        elif operator == "!=":
+            return obs_value != value
+        elif operator == "in":
+            return obs_value in value
+        elif operator == "not_in":
+            return obs_value not in value
+        else:
+            return True
+
+    def _add_oos_metrics_to_combinations(
+        self,
+        combined_results: dict[int, list[CombinedStrategyResult]],
+        train_data: list[dict],
+        validation_data: list[dict],
+        test_data: list[dict],
+    ) -> dict[int, list[CombinedStrategyResult]]:
+        """
+        Add out-of-sample metrics to combination results.
+
+        Args:
+            combined_results: Results by holding period (from training)
+            train_data: Training dataset
+            validation_data: Validation dataset
+            test_data: Test dataset
+
+        Returns:
+            Updated combined_results with OOS metrics filled in
+        """
+        for hp, combos in combined_results.items():
+            # Filter datasets by holding period
+            hp_train = [d for d in train_data if d["holding_period"] == hp]
+            hp_val = [d for d in validation_data if d["holding_period"] == hp]
+            hp_test = [d for d in test_data if d["holding_period"] == hp]
+
+            # Evaluate on validation
+            val_results = self._evaluate_on_dataset(combos, hp_val) if hp_val else [(None, 0)] * len(combos)
+
+            # Evaluate on test
+            test_results = self._evaluate_on_dataset(combos, hp_test) if hp_test else [(None, 0)] * len(combos)
+
+            # Update each combination
+            for i, combo in enumerate(combos):
+                # Training metrics (already computed, copy for clarity)
+                combo.train_alpha = combo.mean_alpha
+                combo.train_sample_size = combo.sample_size
+
+                # Validation metrics
+                combo.validation_alpha, combo.validation_sample_size = val_results[i]
+
+                # Test metrics
+                combo.test_alpha, combo.test_sample_size = test_results[i]
+
+                # Calculate overfit ratio: validation / train
+                if combo.train_alpha and combo.validation_alpha and combo.train_alpha != 0:
+                    combo.overfit_ratio = round(
+                        combo.validation_alpha / combo.train_alpha, 3
+                    )
+
+        return combined_results
 
     def _report_progress(
         self,

@@ -38,6 +38,66 @@ def _add_quarters(quarter: str, periods: int) -> str:
     return f"{new_year}Q{new_q}"
 
 
+def _subtract_quarters(quarter: str, periods: int) -> str:
+    """Subtract N quarters from a quarter string."""
+    return _add_quarters(quarter, -periods)
+
+
+def _compare_quarters(q1: str, q2: str) -> int:
+    """Compare two quarters. Returns -1 if q1 < q2, 0 if equal, 1 if q1 > q2."""
+    if q1 == q2:
+        return 0
+    return -1 if q1 < q2 else 1
+
+
+def split_data_by_quarters(
+    data: list[dict],
+    train_end_quarter: str | None = None,
+    validation_end_quarter: str | None = None,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """
+    Split dataset into train, validation, and test sets by quarter.
+
+    Args:
+        data: List of observation dicts (must have 'buy_quarter' key)
+        train_end_quarter: Last quarter for training (e.g., '2022Q4')
+        validation_end_quarter: Last quarter for validation (e.g., '2023Q4')
+
+    Returns:
+        Tuple of (train_data, validation_data, test_data)
+
+    If no splits specified, returns (all_data, [], [])
+    """
+    if not train_end_quarter:
+        # No split requested - use all data for training
+        return data, [], []
+
+    train_data = []
+    validation_data = []
+    test_data = []
+
+    for obs in data:
+        buy_q = obs.get("buy_quarter", "")
+
+        if buy_q <= train_end_quarter:
+            train_data.append(obs)
+        elif validation_end_quarter and buy_q <= validation_end_quarter:
+            validation_data.append(obs)
+        else:
+            # Everything after validation_end (or train_end if no validation)
+            if validation_end_quarter:
+                test_data.append(obs)
+            else:
+                validation_data.append(obs)
+
+    logger.info(
+        f"Data split: train={len(train_data)}, "
+        f"validation={len(validation_data)}, test={len(test_data)}"
+    )
+
+    return train_data, validation_data, test_data
+
+
 def get_valid_buy_quarters(
     holding_period: int,
     available_quarters: list[str],
@@ -105,6 +165,7 @@ class DatasetBuilder:
         quarters: list[str],
         holding_periods: list[int],
         exclusions: dict | None = None,
+        data_lag_quarters: int = 1,
     ):
         """
         Initialize builder.
@@ -119,10 +180,14 @@ class DatasetBuilder:
                 - require_quality_tags: tags to require
                 - exclude_penny_stocks: bool
                 - exclude_negative_earnings: bool
+            data_lag_quarters: Quarters to lag analysis data (1 = use Q1 data for Q2 decisions).
+                              This prevents look-ahead bias since earnings aren't released
+                              until after the quarter ends. Default is 1 (conservative).
         """
         self.quarters = quarters
         self.holding_periods = holding_periods
         self.exclusions = exclusions or {}
+        self.data_lag_quarters = data_lag_quarters
 
     def build(self) -> dict:
         """
@@ -169,14 +234,32 @@ class DatasetBuilder:
             price_data = self._load_prices(conn, available_quarters)
 
             # 5. For each quarter, load analysis data and build observations
+            # Cache analysis data by quarter to avoid re-querying
+            analysis_cache: dict[str, dict] = {}
+
             for quarter in self.quarters:
                 if quarter not in available_quarters:
                     logger.warning(f"Skipping quarter {quarter} - no price data")
                     continue
 
-                # Load analysis results for this quarter
-                analysis_data = self._query_unified_analysis(conn, quarter)
-                logger.debug(f"Loaded {len(analysis_data)} stocks for {quarter}")
+                # Apply data lag: use analysis from N quarters prior
+                # This prevents look-ahead bias (can't use Q2 earnings to make Q2 buy decision)
+                analysis_quarter = _subtract_quarters(quarter, self.data_lag_quarters)
+
+                # Load analysis results (with caching)
+                if analysis_quarter not in analysis_cache:
+                    analysis_cache[analysis_quarter] = self._query_unified_analysis(
+                        conn, analysis_quarter
+                    )
+                analysis_data = analysis_cache[analysis_quarter]
+
+                if self.data_lag_quarters > 0:
+                    logger.debug(
+                        f"Buy quarter {quarter}: using analysis from {analysis_quarter} "
+                        f"(lag={self.data_lag_quarters}), {len(analysis_data)} stocks"
+                    )
+                else:
+                    logger.debug(f"Loaded {len(analysis_data)} stocks for {quarter}")
 
                 # Build observations for each holding period
                 for hp in self.holding_periods:
@@ -226,6 +309,7 @@ class DatasetBuilder:
                 "holding_periods": self.holding_periods,
                 "latest_quarter": latest_quarter,
                 "valid_buy_quarters": valid_buy_quarters,
+                "data_lag_quarters": self.data_lag_quarters,
             },
         }
 

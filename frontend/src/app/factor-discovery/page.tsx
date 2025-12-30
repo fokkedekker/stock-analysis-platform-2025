@@ -727,6 +727,9 @@ export default function FactorDiscoveryPage() {
                   <th className="text-right py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
                     p-value
                   </th>
+                  <th className="text-center py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
+                    FDR
+                  </th>
                   <th className="text-right py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
                     Sample
                   </th>
@@ -765,6 +768,15 @@ export default function FactorDiscoveryPage() {
                       </td>
                       <td className="py-3 px-2 text-right text-gray-600 dark:text-gray-400">
                         {formatPValue(factor.best_threshold_pvalue)}
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        {factor.best_threshold_fdr_significant ? (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                            ✓
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 dark:text-gray-600">—</span>
+                        )}
                       </td>
                       <td className="py-3 px-2 text-right text-gray-600 dark:text-gray-400">
                         {factor.best_threshold_sample_size?.toLocaleString() || "—"}
@@ -820,6 +832,26 @@ export default function FactorDiscoveryPage() {
                             </span>
                           )}
                         </div>
+                        {/* Out-of-sample metrics (only show if available) */}
+                        {combo.validation_alpha !== null && (
+                          <div className="flex items-center gap-3 mb-2 text-sm">
+                            <span className="text-gray-500 dark:text-gray-400">OOS:</span>
+                            <span className={getAlphaColorClass(combo.validation_alpha || 0)}>
+                              Val: {combo.validation_alpha !== null ? `${combo.validation_alpha > 0 ? "+" : ""}${combo.validation_alpha.toFixed(1)}%` : "—"}
+                            </span>
+                            {combo.test_alpha !== null && (
+                              <span className={getAlphaColorClass(combo.test_alpha || 0)}>
+                                Test: {combo.test_alpha > 0 ? "+" : ""}{combo.test_alpha.toFixed(1)}%
+                              </span>
+                            )}
+                            {combo.overfit_ratio !== null && (
+                              <span className={`${combo.overfit_ratio < 0.5 ? "text-red-600 dark:text-red-400" : combo.overfit_ratio < 0.7 ? "text-amber-600 dark:text-amber-400" : "text-green-600 dark:text-green-400"}`}>
+                                Overfit: {combo.overfit_ratio.toFixed(2)}x
+                                {combo.overfit_ratio < 0.5 && " ⚠️"}
+                              </span>
+                            )}
+                          </div>
+                        )}
                         <div className="flex flex-wrap gap-2">
                           {combo.filters.map((filter, i) => (
                             <span

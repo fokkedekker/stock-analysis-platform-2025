@@ -56,6 +56,9 @@ export interface ThresholdResult {
   ci_lower: number;
   ci_upper: number;
   win_rate: number;
+  // FDR-corrected significance (Benjamini-Hochberg)
+  fdr_significant: boolean;
+  adjusted_pvalue: number | null;
 }
 
 export interface FactorResult {
@@ -72,6 +75,7 @@ export interface FactorResult {
   best_threshold_sample_size: number | null;
   best_threshold_ci_lower: number | null;
   best_threshold_ci_upper: number | null;
+  best_threshold_fdr_significant: boolean | null;
 }
 
 export interface FilterSpec {
@@ -89,6 +93,14 @@ export interface CombinedStrategyResult {
   ci_lower: number;
   ci_upper: number;
   portfolio_stats: Record<number, PortfolioStats>;
+  // Out-of-sample metrics (only populated if train/validation splits used)
+  train_alpha: number | null;
+  train_sample_size: number | null;
+  validation_alpha: number | null;
+  validation_sample_size: number | null;
+  test_alpha: number | null;
+  test_sample_size: number | null;
+  overfit_ratio: number | null;
 }
 
 export interface RawFactorFilter {
