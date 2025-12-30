@@ -756,7 +756,7 @@ export default function FactorDiscoveryPage() {
                   </th>
                   <th className="text-center py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
                     Stability
-                    <InfoTooltip content="% of 5-year rolling windows with positive alpha. Higher = more consistent. Factors with 80%+ stability are trustworthy. Arrow shows trend direction." />
+                    <InfoTooltip content="% of 3-year rolling windows with positive alpha. Higher = more consistent. Factors with 80%+ stability are trustworthy. Arrow shows trend direction." />
                   </th>
                   <th className="text-right py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
                     Sample
@@ -1084,7 +1084,7 @@ export default function FactorDiscoveryPage() {
             <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg border border-emerald-200 dark:border-emerald-800">
               <h3 className="text-sm font-semibold text-emerald-900 dark:text-emerald-100 mb-3">
                 Factor Stability
-                <InfoTooltip content="Stability analysis measures how consistently a factor performs over rolling 5-year windows. A factor with 3% alpha and 90% stability is more trustworthy than one with 6% alpha and 40% stability." />
+                <InfoTooltip content="Stability analysis measures how consistently a factor performs over rolling 3-year windows. A factor with 3% alpha and 90% stability is more trustworthy than one with 6% alpha and 40% stability." />
               </h3>
               <p className="text-xs text-emerald-700 dark:text-emerald-300 mb-4">
                 Prefer factors that perform consistently over time

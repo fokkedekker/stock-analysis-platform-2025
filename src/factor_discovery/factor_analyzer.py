@@ -715,6 +715,7 @@ class FactorAnalyzer:
                 if len(parts) == 2:
                     operator = parts[0]
                     threshold_value = float(parts[1])
+                    print(f"[DECAY] Calling decay for numerical {factor_name}, threshold={threshold_value}, op={operator}, data_len={len(data)}", flush=True)
                     decay_result = compute_factor_decay(
                         observations=data,
                         factor_name=factor_name,
@@ -722,6 +723,7 @@ class FactorAnalyzer:
                         operator=operator,
                         holding_period=holding_period,
                     )
+                    print(f"[DECAY] Result for {factor_name}: {decay_result}", flush=True)
                     if decay_result is not None:
                         decay_metrics_pydantic = DecayMetricsPydantic(
                             decay_score=decay_result.decay_score,
@@ -731,8 +733,10 @@ class FactorAnalyzer:
                             recent_alpha=decay_result.recent_alpha,
                             mean_ic=decay_result.mean_ic,
                         )
+                else:
+                    logger.warning(f"Could not parse threshold for {factor_name}: '{best.threshold}' -> {parts}")
             except (ValueError, IndexError) as e:
-                logger.debug(f"Could not compute decay for {factor_name}: {e}")
+                logger.warning(f"Could not compute decay for {factor_name}: {e}")
 
         return FactorResult(
             factor_name=factor_name,
@@ -866,7 +870,7 @@ class FactorAnalyzer:
                         mean_ic=decay_result.mean_ic,
                     )
             except Exception as e:
-                logger.debug(f"Could not compute decay for {factor_name}: {e}")
+                logger.warning(f"Could not compute decay for {factor_name}: {e}")
 
         return FactorResult(
             factor_name=factor_name,
@@ -1020,6 +1024,7 @@ class FactorAnalyzer:
                     operator = "not_has"
                     threshold_value = False
 
+                print(f"[DECAY] Calling decay for boolean {factor_name}, threshold={best.threshold}, op={operator}, data_len={len(data)}", flush=True)
                 decay_result = compute_factor_decay(
                     observations=data,
                     factor_name=factor_name,
@@ -1037,7 +1042,7 @@ class FactorAnalyzer:
                         mean_ic=decay_result.mean_ic,
                     )
             except Exception as e:
-                logger.debug(f"Could not compute decay for {factor_name}: {e}")
+                logger.warning(f"Could not compute decay for boolean {factor_name}: {e}")
 
         return FactorResult(
             factor_name=factor_name,

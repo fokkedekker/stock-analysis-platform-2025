@@ -33,7 +33,7 @@ function getTrendIndicator(trend: number): { icon: string; label: string } {
 
 /**
  * A badge showing the decay score with color coding.
- * Shows % of rolling 5-year windows with positive alpha.
+ * Shows % of rolling 3-year windows with positive alpha.
  */
 export function DecayScoreBadge({ metrics }: DecayMetricsProps) {
   const [isVisible, setIsVisible] = useState(false);
@@ -62,7 +62,7 @@ export function DecayScoreBadge({ metrics }: DecayMetricsProps) {
           <div className="space-y-1">
             <p className="font-medium text-gray-900 dark:text-gray-100">Factor Stability</p>
             <p className="text-gray-500 dark:text-gray-400">
-              {(score * 100).toFixed(0)}% of {metrics.n_windows} rolling 5-year windows had positive alpha
+              {(score * 100).toFixed(0)}% of {metrics.n_windows} rolling 3-year windows had positive alpha
             </p>
             <div className="space-y-0.5 pt-1 border-t border-gray-200 dark:border-gray-700">
               <div className="flex justify-between">

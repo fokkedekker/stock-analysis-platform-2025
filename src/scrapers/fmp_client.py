@@ -61,6 +61,7 @@ class FMPClient:
         "balance_sheet": "/stable/balance-sheet-statement",
         "cash_flow": "/stable/cash-flow-statement",
         "key_metrics": "/stable/key-metrics",
+        "ratios": "/stable/ratios",
         "dividends": "/stable/dividends",
         "historical_prices": "/stable/historical-price-eod/full",
     }
@@ -287,6 +288,27 @@ class FMPClient:
             params={"symbol": symbol, "period": period, "limit": limit},
         )
 
+    async def get_ratios(
+        self,
+        symbol: str,
+        period: str = "annual",
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Get financial ratios (PE, PB, margins, etc.).
+
+        Args:
+            symbol: Stock ticker symbol.
+            period: 'annual' or 'quarter'.
+            limit: Number of periods to retrieve.
+
+        Returns:
+            List of ratio records with PE, PB, margins, turnover, etc.
+        """
+        return await self._request(
+            self.ENDPOINTS["ratios"],
+            params={"symbol": symbol, "period": period, "limit": limit},
+        )
+
     async def get_dividends(self, symbol: str) -> list[dict[str, Any]]:
         """Get dividend history.
 
@@ -339,7 +361,7 @@ class FMPClient:
             endpoint: One of 'profile', 'income_annual', 'income_quarterly',
                      'balance_annual', 'balance_quarterly', 'cashflow_annual',
                      'cashflow_quarterly', 'metrics_annual', 'metrics_quarterly',
-                     'dividends'.
+                     'ratios_annual', 'ratios_quarterly', 'dividends'.
 
         Returns:
             API response data.
@@ -354,6 +376,8 @@ class FMPClient:
             "cashflow_quarterly": lambda: self.get_cash_flow(symbol, period="quarter"),
             "metrics_annual": lambda: self.get_key_metrics(symbol, period="annual"),
             "metrics_quarterly": lambda: self.get_key_metrics(symbol, period="quarter"),
+            "ratios_annual": lambda: self.get_ratios(symbol, period="annual"),
+            "ratios_quarterly": lambda: self.get_ratios(symbol, period="quarter"),
             "dividends": lambda: self.get_dividends(symbol),
         }
 

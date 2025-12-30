@@ -450,9 +450,10 @@ class DatasetBuilder:
                 ff.book_to_market_percentile,
                 ff.profitability_percentile,
 
+                -- PE from company_profiles (calculated from price/TTM EPS)
+                cp.pe_ratio,
                 -- Key Metrics (raw financial ratios)
-                km.pe_ratio,
-                km.pb_ratio,
+                COALESCE(km.pb_ratio, cp.pb_ratio) as pb_ratio,
                 km.price_to_sales,
                 km.price_to_free_cash_flow,
                 km.price_to_operating_cash_flow,
@@ -499,11 +500,14 @@ class DatasetBuilder:
                 AND mf.analysis_quarter = ?
             LEFT JOIN fama_french_results ff ON t.symbol = ff.symbol
                 AND ff.analysis_quarter = ?
+            -- Company profiles: PE calculated from price/TTM EPS
+            LEFT JOIN company_profiles cp ON t.symbol = cp.symbol
+                AND cp.fiscal_quarter = ?
             -- Key metrics: get the latest annual data up to the quarter end date
             LEFT JOIN (
                 SELECT DISTINCT ON (symbol)
                     symbol,
-                    pe_ratio, pb_ratio, price_to_sales, price_to_free_cash_flow,
+                    pb_ratio, price_to_sales, price_to_free_cash_flow,
                     price_to_operating_cash_flow, ev_to_ebitda, ev_to_sales,
                     ev_to_free_cash_flow, ev_to_operating_cash_flow,
                     roe, roa, return_on_tangible_assets,
@@ -519,7 +523,7 @@ class DatasetBuilder:
             ) km ON t.symbol = km.symbol
             WHERE t.is_active = TRUE
             """,
-            (quarter,) * 8 + (quarter_end,),
+            (quarter,) * 9 + (quarter_end,),
         ).fetchall()
 
         columns = [desc[0] for desc in conn.description]

@@ -54,7 +54,7 @@ async def main():
         console.print(f"[yellow]Step 2: Fetching financial data for {len(symbols)} stocks...[/yellow]")
 
         # Calculate estimated time
-        api_calls = len(symbols) * 11  # 11 endpoints per ticker (annual + quarterly)
+        api_calls = len(symbols) * 13  # 13 endpoints per ticker (annual + quarterly + ratios)
         est_minutes = api_calls / settings.RATE_LIMIT_PER_MINUTE
         console.print(f"Estimated API calls: {api_calls:,}")
         console.print(f"Estimated time: {est_minutes:.1f} minutes ({est_minutes/60:.1f} hours)")

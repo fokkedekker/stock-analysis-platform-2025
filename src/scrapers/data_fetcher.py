@@ -31,6 +31,8 @@ ALL_ENDPOINTS = [
     "cashflow_quarterly",
     "metrics_annual",
     "metrics_quarterly",
+    "ratios_annual",
+    "ratios_quarterly",
     "dividends",
 ]
 
@@ -555,13 +557,13 @@ class DataFetcher:
                             self._safe_decimal(m.get("priceToFreeCashFlowsRatio")),
                             self._safe_decimal(m.get("priceToOperatingCashFlowsRatio")),
                             self._safe_decimal(m.get("evToSales")),
-                            self._safe_decimal(m.get("enterpriseValueOverEBITDA")),
+                            self._safe_decimal(m.get("evToEBITDA")),
                             self._safe_decimal(m.get("evToOperatingCashFlow")),
                             self._safe_decimal(m.get("evToFreeCashFlow")),
                             self._safe_decimal(m.get("enterpriseValue")),
-                            self._safe_decimal(m.get("roe")),
+                            self._safe_decimal(m.get("returnOnEquity")),
                             self._safe_decimal(m.get("returnOnAssets")),
-                            self._safe_decimal(m.get("roic")),
+                            self._safe_decimal(m.get("returnOnInvestedCapital")),
                             self._safe_decimal(m.get("returnOnTangibleAssets")),
                             self._safe_decimal(m.get("grossProfitMargin")),
                             self._safe_decimal(m.get("operatingProfitMargin")),
@@ -586,6 +588,80 @@ class DataFetcher:
                     )
                 except Exception as e:
                     logger.error(f"Error saving key metrics for {symbol}: {e}")
+
+    def save_ratios(
+        self,
+        symbol: str,
+        ratios: list[dict[str, Any]] | None,
+        period: str,
+        conn: duckdb.DuckDBPyConnection | None = None,
+    ) -> None:
+        """Save ratios data to key_metrics table (updates existing rows).
+
+        The /ratios endpoint provides PE, PB, margins, turnover ratios, etc.
+        that are not available in the /key-metrics endpoint.
+        This updates existing key_metrics rows with the additional ratio data.
+        """
+        if not ratios:
+            return
+
+        ctx = self.db.transaction(conn) if conn is not None else self.db.get_connection()
+        with ctx as db_conn:
+            for r in ratios:
+                try:
+                    db_conn.execute(
+                        """
+                        UPDATE key_metrics SET
+                            pe_ratio = COALESCE(?, pe_ratio),
+                            pb_ratio = COALESCE(?, pb_ratio),
+                            price_to_sales = COALESCE(?, price_to_sales),
+                            price_to_free_cash_flow = COALESCE(?, price_to_free_cash_flow),
+                            price_to_operating_cash_flow = COALESCE(?, price_to_operating_cash_flow),
+                            gross_profit_margin = COALESCE(?, gross_profit_margin),
+                            operating_profit_margin = COALESCE(?, operating_profit_margin),
+                            net_profit_margin = COALESCE(?, net_profit_margin),
+                            quick_ratio = COALESCE(?, quick_ratio),
+                            cash_ratio = COALESCE(?, cash_ratio),
+                            debt_ratio = COALESCE(?, debt_ratio),
+                            debt_to_equity = COALESCE(?, debt_to_equity),
+                            debt_to_assets = COALESCE(?, debt_to_assets),
+                            interest_coverage = COALESCE(?, interest_coverage),
+                            asset_turnover = COALESCE(?, asset_turnover),
+                            inventory_turnover = COALESCE(?, inventory_turnover),
+                            receivables_turnover = COALESCE(?, receivables_turnover),
+                            payables_turnover = COALESCE(?, payables_turnover),
+                            dividend_yield = COALESCE(?, dividend_yield),
+                            payout_ratio = COALESCE(?, payout_ratio)
+                        WHERE symbol = ? AND fiscal_date = ? AND period = ?
+                        """,
+                        (
+                            self._safe_decimal(r.get("priceEarningsRatio")),
+                            self._safe_decimal(r.get("priceToBookRatio")),
+                            self._safe_decimal(r.get("priceToSalesRatio")),
+                            self._safe_decimal(r.get("priceToFreeCashFlowsRatio")),
+                            self._safe_decimal(r.get("priceToOperatingCashFlowsRatio")),
+                            self._safe_decimal(r.get("grossProfitMargin")),
+                            self._safe_decimal(r.get("operatingProfitMargin")),
+                            self._safe_decimal(r.get("netProfitMargin")),
+                            self._safe_decimal(r.get("quickRatio")),
+                            self._safe_decimal(r.get("cashRatio")),
+                            self._safe_decimal(r.get("debtRatio")),
+                            self._safe_decimal(r.get("debtEquityRatio")),
+                            self._safe_decimal(r.get("debtToAssets")),
+                            self._safe_decimal(r.get("interestCoverage")),
+                            self._safe_decimal(r.get("assetTurnover")),
+                            self._safe_decimal(r.get("inventoryTurnover")),
+                            self._safe_decimal(r.get("receivablesTurnover")),
+                            self._safe_decimal(r.get("payablesTurnover")),
+                            self._safe_decimal(r.get("dividendYield")),
+                            self._safe_decimal(r.get("payoutRatio")),
+                            symbol,
+                            r.get("date"),
+                            period,
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(f"Error saving ratios for {symbol}: {e}")
 
     def save_dividends(
         self,
@@ -684,6 +760,10 @@ class DataFetcher:
             self.save_key_metrics(symbol, data, "annual", conn)
         elif endpoint == "metrics_quarterly":
             self.save_key_metrics(symbol, data, "quarter", conn)
+        elif endpoint == "ratios_annual":
+            self.save_ratios(symbol, data, "annual", conn)
+        elif endpoint == "ratios_quarterly":
+            self.save_ratios(symbol, data, "quarter", conn)
         elif endpoint == "dividends":
             self.save_dividends(symbol, data, conn)
 
@@ -861,12 +941,21 @@ class DataFetcher:
         return stats
 
     @staticmethod
-    def _safe_decimal(value: Any) -> float | None:
-        """Safely convert value to decimal/float."""
+    def _safe_decimal(value: Any, clamp: bool = True) -> float | None:
+        """Safely convert value to decimal/float.
+
+        Args:
+            value: Value to convert
+            clamp: If True, clamp to DECIMAL(18,3) range to avoid overflow
+        """
         if value is None:
             return None
         try:
-            return float(value)
+            result = float(value)
+            # DECIMAL(18,3) max is ~999,999,999,999,999.999
+            if clamp and abs(result) > 999_999_999_999_999:
+                return None  # Skip absurd values from penny stocks
+            return result
         except (ValueError, TypeError):
             return None
 

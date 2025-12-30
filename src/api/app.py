@@ -1,5 +1,7 @@
 """FastAPI application setup."""
 
+print("[STARTUP] Loading FastAPI application...", flush=True)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

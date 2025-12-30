@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Any
 
+import warnings
+
 import numpy as np
 from scipy import stats
 
@@ -51,7 +53,7 @@ class DecayAnalyzer:
 
     def __init__(
         self,
-        window_quarters: int = 20,  # 5 years default
+        window_quarters: int = 12,  # 3 years default (more practical)
         min_window_samples: int = 30,  # Minimum samples per window
         ic_significance_level: float = 0.05,  # p-value threshold for IC
     ):
@@ -80,18 +82,22 @@ class DecayAnalyzer:
         Returns:
             DecayMetrics if enough data, None otherwise
         """
+        print(f"[DECAY] Analyzing {factor_name} for {holding_period}Q, threshold={threshold}, op={operator}", flush=True)
+
         # Filter to correct holding period
         filtered_obs = [
             o for o in observations if o.get("holding_period") == holding_period
         ]
 
         if len(filtered_obs) < self.window_quarters * 10:
+            print(f"[DECAY] Skip {factor_name}: {len(filtered_obs)} obs < {self.window_quarters * 10} required", flush=True)
             return None  # Not enough data
 
         # Get unique quarters sorted chronologically
         quarters = sorted(set(o.get("buy_quarter", "") for o in filtered_obs))
 
         if len(quarters) < self.window_quarters:
+            print(f"[DECAY] Skip {factor_name}: {len(quarters)} quarters < {self.window_quarters} required", flush=True)
             return None  # Not enough quarters for rolling analysis
 
         # Compute rolling statistics
@@ -99,7 +105,7 @@ class DecayAnalyzer:
             filtered_obs, quarters, factor_name, threshold, operator
         )
 
-        if rolling_stats.n_windows < 3:
+        if len(rolling_stats.alphas) < 3:
             return None  # Need at least 3 windows for trend
 
         # Compute decay metrics from rolling stats
@@ -163,7 +169,9 @@ class DecayAnalyzer:
 
             # Calculate Information Coefficient (rank correlation)
             try:
-                ic, pvalue = stats.spearmanr(factor_values, obs_alphas)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=stats.ConstantInputWarning)
+                    ic, pvalue = stats.spearmanr(factor_values, obs_alphas)
                 if np.isnan(ic):
                     ic, pvalue = 0.0, 1.0
             except Exception:
@@ -181,11 +189,6 @@ class DecayAnalyzer:
             window_quarters=window_quarters,
             sample_sizes=sample_sizes,
         )
-
-    @property
-    def n_windows(self) -> int:
-        """Property to get number of windows from RollingStats."""
-        return 0  # Will be set from RollingStats
 
     def _apply_threshold(
         self,
@@ -295,7 +298,7 @@ def compute_factor_decay(
     threshold: float | str | bool,
     operator: str,
     holding_period: int,
-    window_quarters: int = 20,
+    window_quarters: int = 12,
 ) -> DecayMetrics | None:
     """
     Convenience function to compute decay metrics for a factor.

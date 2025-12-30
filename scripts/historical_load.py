@@ -237,12 +237,14 @@ class HistoricalDataFetcher:
                     balance = await self.client.get_balance_sheet(symbol, "quarter", self.financial_limit)
                     cashflow = await self.client.get_cash_flow(symbol, "quarter", self.financial_limit)
                     metrics = await self.client.get_key_metrics(symbol, "quarter", self.financial_limit)
+                    ratios = await self.client.get_ratios(symbol, "quarter", self.financial_limit)
 
                     # Save to database using DataFetcher's save methods
                     self.data_fetcher.save_income_statements(symbol, income, "quarter", db_conn)
                     self.data_fetcher.save_balance_sheets(symbol, balance, "quarter", db_conn)
                     self.data_fetcher.save_cash_flow_statements(symbol, cashflow, "quarter", db_conn)
                     self.data_fetcher.save_key_metrics(symbol, metrics, "quarter", db_conn)
+                    self.data_fetcher.save_ratios(symbol, ratios, "quarter", db_conn)
 
                     await self.checkpoint.mark_endpoint_completed(symbol, "financials")
                     async with stats_lock:
