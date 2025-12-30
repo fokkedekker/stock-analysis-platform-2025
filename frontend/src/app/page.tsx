@@ -201,7 +201,8 @@ export default function PipelinePage() {
   // Stage 2: Quality
   const [qualityFilter, setQualityFilter] = useState(true)
   const [minQuality, setMinQuality] = useState<QualityLabel>("compounder")
-  const [selectedTags, setSelectedTags] = useState<Set<QualityTag>>(new Set())
+  const [requiredTags, setRequiredTags] = useState<Set<QualityTag>>(new Set())
+  const [excludedTags, setExcludedTags] = useState<Set<QualityTag>>(new Set())
 
   // Stage 3: Valuation
   const [minLenses, setMinLenses] = useState(3)
@@ -216,6 +217,21 @@ export default function PipelinePage() {
   const [maxPeg, setMaxPeg] = useState(1.5)
   const [mfTopPct, setMfTopPct] = useState(20)
   const [ffBmTopPct, setFfBmTopPct] = useState(30)
+
+  // Count active lenses and reset minLenses when all are disabled
+  const activeLensCount = useMemo(() => {
+    return [lensGraham, lensNetNet, lensPeg, lensMagicFormula, lensFamaFrenchBm].filter(Boolean).length
+  }, [lensGraham, lensNetNet, lensPeg, lensMagicFormula, lensFamaFrenchBm])
+
+  // Reset minLenses to 0 when all lenses are disabled
+  useEffect(() => {
+    if (activeLensCount === 0) {
+      setMinLenses(0)
+    } else if (minLenses > activeLensCount) {
+      // Also clamp minLenses if it's higher than available lenses
+      setMinLenses(activeLensCount)
+    }
+  }, [activeLensCount, minLenses])
 
   // Ranking
   const [rankBy, setRankBy] = useState<RankMethod>("magic-formula")
@@ -240,7 +256,8 @@ export default function PipelinePage() {
         piotroski_min: piotroskiMin,
         quality_filter: qualityFilter,
         min_quality: minQuality,
-        quality_tags_filter: selectedTags.size > 0 ? Array.from(selectedTags) : undefined,
+        quality_tags_filter: requiredTags.size > 0 ? Array.from(requiredTags) : undefined,
+        excluded_quality_tags: excludedTags.size > 0 ? Array.from(excludedTags) : undefined,
         min_valuation_lenses: minLenses,
         strict_mode: strictMode,
         lens_graham: lensGraham,
@@ -274,7 +291,8 @@ export default function PipelinePage() {
     piotroskiMin,
     qualityFilter,
     minQuality,
-    selectedTags,
+    requiredTags,
+    excludedTags,
     minLenses,
     strictMode,
     lensGraham,
@@ -307,29 +325,40 @@ export default function PipelinePage() {
 
     // Survival gates
     setRequirePiotroski(s.piotroski_enabled ?? false)
-    setPiotroskiMin(s.piotroski_min ?? 6)
+    setPiotroskiMin(s.piotroski_min ?? 5)
     setRequireAltman(s.altman_enabled ?? false)
     setAltmanZone((s.altman_zone as "safe" | "grey" | "distress") ?? "safe")
 
     // Quality
     setQualityFilter(s.quality_enabled ?? false)
-    setMinQuality((s.min_quality as QualityLabel) ?? "compounder")
+    setMinQuality((s.min_quality as QualityLabel) ?? "weak")
 
-    // Build tag set from required tags only
-    const tagSet = new Set<QualityTag>()
+    // Load required tags
+    const reqTags = new Set<QualityTag>()
     if (s.required_tags && Array.isArray(s.required_tags)) {
       s.required_tags.forEach(tag => {
         if (QUALITY_TAGS.includes(tag as QualityTag)) {
-          tagSet.add(tag as QualityTag)
+          reqTags.add(tag as QualityTag)
         }
       })
     }
-    setSelectedTags(tagSet)
+    setRequiredTags(reqTags)
+
+    // Load excluded tags
+    const exclTags = new Set<QualityTag>()
+    if (s.excluded_tags && Array.isArray(s.excluded_tags)) {
+      s.excluded_tags.forEach(tag => {
+        if (QUALITY_TAGS.includes(tag as QualityTag)) {
+          exclTags.add(tag as QualityTag)
+        }
+      })
+    }
+    setExcludedTags(exclTags)
 
     // Valuation lenses
     setLensGraham(s.graham_enabled ?? false)
     setGrahamMode((s.graham_mode as GrahamMode) ?? "strict")
-    setGrahamMin(s.graham_min ?? 8)
+    setGrahamMin(s.graham_min ?? 5)
     setLensMagicFormula(s.magic_formula_enabled ?? false)
     setMfTopPct(s.mf_top_pct ?? 20)
     setLensPeg(s.peg_enabled ?? false)
@@ -337,7 +366,7 @@ export default function PipelinePage() {
     setLensNetNet(s.net_net_enabled ?? false)
     setLensFamaFrenchBm(s.fama_french_enabled ?? false)
     setFfBmTopPct(s.ff_top_pct ?? 30)
-    setMinLenses(s.min_lenses ?? 3)
+    setMinLenses(s.min_lenses ?? 0)  // Default to 0 so raw-filter-only strategies work
     setStrictMode(s.strict_mode ?? false)
 
     // Raw factor filters
@@ -356,7 +385,8 @@ export default function PipelinePage() {
     setPiotroskiMin(6)
     setQualityFilter(true)
     setMinQuality("compounder")
-    setSelectedTags(new Set())
+    setRequiredTags(new Set())
+    setExcludedTags(new Set())
     setMinLenses(3)
     setStrictMode(false)
     setLensGraham(true)
@@ -403,6 +433,7 @@ export default function PipelinePage() {
   }
 
   const selectAll = () => setSelectedStocks(new Set(stocks.map((s) => s.symbol)))
+  const selectFirstN = (n: number) => setSelectedStocks(new Set(stocks.slice(0, n).map((s) => s.symbol)))
   const clearSelection = () => setSelectedStocks(new Set())
 
   const handleSimulateBuy = () => {
@@ -523,8 +554,10 @@ export default function PipelinePage() {
         setQualityFilter={setQualityFilter}
         minQuality={minQuality}
         setMinQuality={setMinQuality}
-        selectedTags={selectedTags}
-        setSelectedTags={setSelectedTags}
+        requiredTags={requiredTags}
+        setRequiredTags={setRequiredTags}
+        excludedTags={excludedTags}
+        setExcludedTags={setExcludedTags}
       />
 
       {/* Stage 3: Valuation Lenses */}
@@ -582,6 +615,39 @@ export default function PipelinePage() {
         <span className="text-sm text-gray-500">
           Showing {stocks.length} stocks
         </span>
+        {quarter && stocks.length > 0 && (
+          <div className="flex items-center gap-2 ml-4">
+            <span className="text-sm text-gray-500">Select:</span>
+            <button
+              onClick={() => selectFirstN(10)}
+              disabled={stocks.length < 10}
+              className="px-2 py-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 disabled:text-gray-400 disabled:cursor-not-allowed"
+            >
+              Top 10
+            </button>
+            <button
+              onClick={() => selectFirstN(20)}
+              disabled={stocks.length < 20}
+              className="px-2 py-1 text-xs font-medium text-indigo-600 hover:text-indigo-500 disabled:text-gray-400 disabled:cursor-not-allowed"
+            >
+              Top 20
+            </button>
+            <button
+              onClick={selectAll}
+              className="px-2 py-1 text-xs font-medium text-indigo-600 hover:text-indigo-500"
+            >
+              All
+            </button>
+            {selectedStocks.size > 0 && (
+              <button
+                onClick={clearSelection}
+                className="px-2 py-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Error State */}
@@ -723,10 +789,12 @@ export default function PipelinePage() {
         </div>
       )}
 
-      {/* Floating action bar for backtest - only show when historical quarter selected */}
+      {/* Floating action bar for backtest and portfolio - only show when historical quarter selected */}
       {quarter && (
         <BacktestFloatingBar
           selectedCount={selectedStocks.size}
+          selectedSymbols={Array.from(selectedStocks)}
+          quarter={quarter}
           onClear={clearSelection}
           onSimulate={handleSimulateBuy}
         />

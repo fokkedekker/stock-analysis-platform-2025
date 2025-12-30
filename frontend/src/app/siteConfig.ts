@@ -4,8 +4,13 @@ export const siteConfig = {
   description: "Fundamental valuation systems for NYSE/NASDAQ stocks",
   baseLinks: {
     home: "/",
+    portfolio: "/portfolio",
     gridSearch: "/grid-search",
-    factorDiscovery: "/factor-discovery",
+    // Models section
+    factorScreening: "/models/factor-screening",
+    elasticNet: "/models/elastic-net",
+    gam: "/models/gam",
+    // Screeners
     graham: "/screeners/graham",
     magicFormula: "/screeners/magic-formula",
     piotroski: "/screeners/piotroski",

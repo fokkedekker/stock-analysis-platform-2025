@@ -19,6 +19,40 @@ from .models import CombinedStrategyResult, FactorResult, FilterSpec, PortfolioS
 logger = logging.getLogger(__name__)
 
 
+def compute_stability_adjusted_score(
+    raw_alpha: float,
+    decay_score: float | None,
+    prefer_stable: bool = False,
+    weight: float = 0.5,
+) -> float:
+    """
+    Compute stability-adjusted score for ranking.
+
+    If prefer_stable=True:
+        Adjusted score = alpha * (1 - weight + weight * decay_score)
+        This penalizes factors with low stability (decay_score < 1)
+    Else:
+        Adjusted score = alpha (unchanged)
+
+    Args:
+        raw_alpha: Raw alpha value
+        decay_score: Decay score (0-1), None means no stability data
+        prefer_stable: If True, apply stability adjustment
+        weight: How much to weight stability (0.5 = 50% weight)
+
+    Returns:
+        Adjusted score for ranking
+    """
+    if not prefer_stable or decay_score is None:
+        return raw_alpha
+
+    # Stability factor: ranges from (1 - weight) to 1.0
+    # If decay_score = 1.0 (perfectly stable), factor = 1.0
+    # If decay_score = 0.0 (unstable), factor = (1 - weight) = 0.5 with default
+    stability_factor = 1 - weight + (weight * decay_score)
+    return raw_alpha * stability_factor
+
+
 # =============================================================================
 # Worker functions for parallel processing (must be at module level)
 # =============================================================================
@@ -218,6 +252,7 @@ class CombinationFinder:
         portfolio_sizes: list[int] | None = None,
         ranking_method: str = "magic-formula",
         num_workers: int = 8,
+        prefer_stable: bool = False,
     ) -> list[CombinedStrategyResult]:
         """
         Test combinations of top factors using parallel processing.
@@ -234,6 +269,7 @@ class CombinationFinder:
             portfolio_sizes: List of portfolio sizes to simulate (e.g., [10, 20, 50])
             ranking_method: How to rank stocks (magic-formula, earnings-yield, roic, graham-score)
             num_workers: Number of parallel workers
+            prefer_stable: If True, prefer factors with higher stability (decay_score)
 
         Returns:
             List of CombinedStrategyResult sorted by mean alpha
@@ -245,7 +281,7 @@ class CombinationFinder:
             return []
 
         # Get top factors that are significant
-        top_factors = self._select_top_factors(top_factors_count)
+        top_factors = self._select_top_factors(top_factors_count, prefer_stable=prefer_stable)
 
         if not top_factors:
             logger.warning("No significant factors found for combination analysis")
@@ -354,17 +390,20 @@ class CombinationFinder:
 
         return results[:top_n_results]
 
-    def _select_top_factors(self, top_n: int) -> list[FactorResult]:
+    def _select_top_factors(
+        self, top_n: int, prefer_stable: bool = False
+    ) -> list[FactorResult]:
         """
         Select top N factors for combination testing.
 
         Criteria:
         - Must have a best threshold defined
         - Must be FDR-significant (Benjamini-Hochberg corrected)
-        - Sorted by lift (descending)
+        - Sorted by lift (descending), optionally adjusted for stability
 
         Args:
             top_n: Number of top factors to select
+            prefer_stable: If True, penalize factors with low stability
 
         Returns:
             List of top FactorResult objects
@@ -388,12 +427,27 @@ class CombinationFinder:
             )
         ]
 
-        # Sort by lift (descending)
+        # Sort by lift, optionally adjusted for stability
+        def sort_key(f: FactorResult) -> float:
+            raw_lift = f.best_threshold_lift or 0
+            decay_score = (
+                f.decay_metrics.decay_score if f.decay_metrics else None
+            )
+            return compute_stability_adjusted_score(
+                raw_lift, decay_score, prefer_stable=prefer_stable
+            )
+
         significant_factors = sorted(
             significant_factors,
-            key=lambda f: f.best_threshold_lift or 0,
+            key=sort_key,
             reverse=True,
         )
+
+        if prefer_stable:
+            logger.info(
+                f"Selected factors with stability adjustment. "
+                f"Factors with high stability are ranked higher."
+            )
 
         return significant_factors[:top_n]
 

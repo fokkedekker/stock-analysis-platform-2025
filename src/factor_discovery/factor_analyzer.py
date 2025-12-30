@@ -16,7 +16,8 @@ from typing import Any
 import numpy as np
 from scipy import stats
 
-from .models import FactorResult, ThresholdResult
+from .models import DecayMetricsPydantic, FactorResult, ThresholdResult
+from ..ml_models.decay_analyzer import compute_factor_decay
 
 logger = logging.getLogger(__name__)
 
@@ -704,6 +705,35 @@ class FactorAnalyzer:
         elif threshold_results:
             best = max(threshold_results, key=lambda r: r.mean_alpha)
 
+        # Compute decay metrics for best threshold
+        decay_metrics_pydantic = None
+        if best is not None:
+            # Parse threshold string to get numeric value
+            # Format: ">= X" or "<= X"
+            try:
+                parts = best.threshold.split()
+                if len(parts) == 2:
+                    operator = parts[0]
+                    threshold_value = float(parts[1])
+                    decay_result = compute_factor_decay(
+                        observations=data,
+                        factor_name=factor_name,
+                        threshold=threshold_value,
+                        operator=operator,
+                        holding_period=holding_period,
+                    )
+                    if decay_result is not None:
+                        decay_metrics_pydantic = DecayMetricsPydantic(
+                            decay_score=decay_result.decay_score,
+                            ic_stability=decay_result.ic_stability,
+                            alpha_trend=decay_result.alpha_trend,
+                            n_windows=decay_result.n_windows,
+                            recent_alpha=decay_result.recent_alpha,
+                            mean_ic=decay_result.mean_ic,
+                        )
+            except (ValueError, IndexError) as e:
+                logger.debug(f"Could not compute decay for {factor_name}: {e}")
+
         return FactorResult(
             factor_name=factor_name,
             factor_type="numerical",
@@ -718,6 +748,7 @@ class FactorAnalyzer:
             best_threshold_sample_size=best.sample_size if best else None,
             best_threshold_ci_lower=best.ci_lower if best else None,
             best_threshold_ci_upper=best.ci_upper if best else None,
+            decay_metrics=decay_metrics_pydantic,
         )
 
     @staticmethod
@@ -814,6 +845,29 @@ class FactorAnalyzer:
         elif threshold_results:
             best = max(threshold_results, key=lambda r: r.mean_alpha)
 
+        # Compute decay metrics for best category
+        decay_metrics_pydantic = None
+        if best is not None:
+            try:
+                decay_result = compute_factor_decay(
+                    observations=data,
+                    factor_name=factor_name,
+                    threshold=best.threshold,  # Category name as string
+                    operator="==",
+                    holding_period=holding_period,
+                )
+                if decay_result is not None:
+                    decay_metrics_pydantic = DecayMetricsPydantic(
+                        decay_score=decay_result.decay_score,
+                        ic_stability=decay_result.ic_stability,
+                        alpha_trend=decay_result.alpha_trend,
+                        n_windows=decay_result.n_windows,
+                        recent_alpha=decay_result.recent_alpha,
+                        mean_ic=decay_result.mean_ic,
+                    )
+            except Exception as e:
+                logger.debug(f"Could not compute decay for {factor_name}: {e}")
+
         return FactorResult(
             factor_name=factor_name,
             factor_type="categorical",
@@ -828,6 +882,7 @@ class FactorAnalyzer:
             best_threshold_sample_size=best.sample_size if best else None,
             best_threshold_ci_lower=best.ci_lower if best else None,
             best_threshold_ci_upper=best.ci_upper if best else None,
+            decay_metrics=decay_metrics_pydantic,
         )
 
     @staticmethod
@@ -951,6 +1006,39 @@ class FactorAnalyzer:
             else:
                 best = max(threshold_results, key=lambda r: r.mean_alpha)
 
+        # Compute decay metrics for best threshold
+        decay_metrics_pydantic = None
+        if best is not None:
+            try:
+                # Map threshold label back to operator
+                # "has" or "exclude" -> has (True)
+                # "doesn't have" or "allow" -> not_has (False)
+                if best.threshold in ["has", "exclude"]:
+                    operator = "has"
+                    threshold_value = True
+                else:
+                    operator = "not_has"
+                    threshold_value = False
+
+                decay_result = compute_factor_decay(
+                    observations=data,
+                    factor_name=factor_name,
+                    threshold=threshold_value,
+                    operator=operator,
+                    holding_period=holding_period,
+                )
+                if decay_result is not None:
+                    decay_metrics_pydantic = DecayMetricsPydantic(
+                        decay_score=decay_result.decay_score,
+                        ic_stability=decay_result.ic_stability,
+                        alpha_trend=decay_result.alpha_trend,
+                        n_windows=decay_result.n_windows,
+                        recent_alpha=decay_result.recent_alpha,
+                        mean_ic=decay_result.mean_ic,
+                    )
+            except Exception as e:
+                logger.debug(f"Could not compute decay for {factor_name}: {e}")
+
         return FactorResult(
             factor_name=factor_name,
             factor_type="boolean",
@@ -965,6 +1053,7 @@ class FactorAnalyzer:
             best_threshold_sample_size=best.sample_size if best else None,
             best_threshold_ci_lower=best.ci_lower if best else None,
             best_threshold_ci_upper=best.ci_upper if best else None,
+            decay_metrics=decay_metrics_pydantic,
         )
 
     @classmethod

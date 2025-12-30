@@ -192,6 +192,7 @@ class FactorDiscoveryRunner:
                 portfolio_sizes=request.portfolio_sizes,
                 ranking_method=request.ranking_method,
                 max_factors=request.max_factors,
+                prefer_stable=request.prefer_stable_factors,
             )
             self._report_progress(run_id, "finding_combinations", 1.0)
 
@@ -412,6 +413,7 @@ class FactorDiscoveryRunner:
         portfolio_sizes: list[int] | None = None,
         ranking_method: str = "magic-formula",
         max_factors: int = 4,
+        prefer_stable: bool = False,
     ) -> dict[int, list[CombinedStrategyResult]]:
         """
         Find best factor combinations for each holding period.
@@ -424,6 +426,7 @@ class FactorDiscoveryRunner:
             significance_level: P-value threshold
             portfolio_sizes: Portfolio sizes to simulate
             ranking_method: How to rank stocks for top-N selection
+            prefer_stable: If True, prefer factors with higher stability
 
         Returns:
             Dict of holding_period -> list of CombinedStrategyResult
@@ -469,6 +472,7 @@ class FactorDiscoveryRunner:
                 portfolio_sizes=portfolio_sizes,
                 ranking_method=ranking_method,
                 num_workers=self.num_workers,  # Use runner's worker count
+                prefer_stable=prefer_stable,
             )
 
             combined_results[hp] = combinations

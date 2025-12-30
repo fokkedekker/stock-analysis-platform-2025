@@ -641,7 +641,11 @@ async def screen_pipeline(
     # Tag filter (optional)
     quality_tags_filter: str | None = Query(
         None,
-        description="Comma-separated list of quality tags to filter by (e.g. 'Durable Compounder,Cash Machine')",
+        description="Comma-separated list of quality tags to REQUIRE (stock must have ALL of these)",
+    ),
+    excluded_quality_tags: str | None = Query(
+        None,
+        description="Comma-separated list of quality tags to EXCLUDE (stock must NOT have any of these)",
     ),
     # Raw factor filters (JSON array from Factor Discovery)
     raw_filters: str | None = Query(
@@ -866,10 +870,14 @@ async def screen_pipeline(
                     END
                 ))
                 -- Stage 3: Valuation (at-least-N or strict mode)
+                -- If no lenses are active, skip this filter entirely
                 AND (
-                    CASE WHEN ? THEN lenses_passed = lenses_active
-                    ELSE lenses_passed >= ?
-                    END
+                    lenses_active = 0
+                    OR (
+                        CASE WHEN ? THEN lenses_passed = lenses_active
+                        ELSE lenses_passed >= ?
+                        END
+                    )
                 )
             ORDER BY
                 CASE ?
@@ -930,10 +938,15 @@ async def screen_pipeline(
 
         columns = [desc[0] for desc in conn.description]
 
-        # Parse tag filter if provided
-        filter_tags = None
+        # Parse required tags filter if provided
+        required_tags: set[str] = set()
         if quality_tags_filter:
-            filter_tags = set(t.strip() for t in quality_tags_filter.split(",") if t.strip())
+            required_tags = set(t.strip() for t in quality_tags_filter.split(",") if t.strip())
+
+        # Parse excluded tags filter if provided
+        excluded_tag_set: set[str] = set()
+        if excluded_quality_tags:
+            excluded_tag_set = set(t.strip() for t in excluded_quality_tags.split(",") if t.strip())
 
         # Parse raw factor filters if provided
         parsed_raw_filters: list[dict] = []
@@ -961,15 +974,14 @@ async def screen_pipeline(
                 except (json.JSONDecodeError, TypeError):
                     stock_tags = set()
 
-            # Apply tag filter if specified
-            # Stock must have at least one selected tag AND must NOT have any excluded tags
-            if filter_tags:
-                excluded_tags = ALL_QUALITY_TAGS - filter_tags
-                # Check if stock has any excluded tags
-                if stock_tags & excluded_tags:
+            # Apply tag filters if specified
+            # Required tags: stock must have ALL of these (if any specified)
+            if required_tags:
+                if not required_tags.issubset(stock_tags):
                     continue
-                # Check if stock has at least one of the selected tags
-                if not (stock_tags & filter_tags):
+            # Excluded tags: stock must NOT have any of these (if any specified)
+            if excluded_tag_set:
+                if stock_tags & excluded_tag_set:
                     continue
 
             # Apply raw factor filters if specified

@@ -30,6 +30,8 @@ export interface FactorDiscoveryRequest {
   max_factors: number;
   exclusions: ExclusionFilters;
   factor_categories: string[];
+  // Stability preference
+  prefer_stable_factors: boolean;
 }
 
 export interface FactorCategory {
@@ -61,6 +63,15 @@ export interface ThresholdResult {
   adjusted_pvalue: number | null;
 }
 
+export interface DecayMetrics {
+  decay_score: number; // % of rolling windows with positive alpha (0-1)
+  ic_stability: number; // % of windows with significant IC (0-1)
+  alpha_trend: number; // Direction of alpha over time (-1 to +1)
+  n_windows: number; // Number of rolling windows analyzed
+  recent_alpha: number | null; // Alpha in most recent window
+  mean_ic: number | null; // Average information coefficient across windows
+}
+
 export interface FactorResult {
   factor_name: string;
   factor_type: "numerical" | "categorical" | "boolean";
@@ -76,6 +87,8 @@ export interface FactorResult {
   best_threshold_ci_lower: number | null;
   best_threshold_ci_upper: number | null;
   best_threshold_fdr_significant: boolean | null;
+  // Decay/stability metrics for best threshold
+  decay_metrics: DecayMetrics | null;
 }
 
 export interface FilterSpec {

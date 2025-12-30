@@ -11,8 +11,10 @@ export interface QualityClassificationProps {
   setQualityFilter: (v: boolean) => void
   minQuality: QualityLabel
   setMinQuality: (v: QualityLabel) => void
-  selectedTags: Set<QualityTag>
-  setSelectedTags: (v: Set<QualityTag>) => void
+  requiredTags: Set<QualityTag>
+  setRequiredTags: (v: Set<QualityTag>) => void
+  excludedTags: Set<QualityTag>
+  setExcludedTags: (v: Set<QualityTag>) => void
 }
 
 export function QualityClassification({
@@ -20,8 +22,10 @@ export function QualityClassification({
   setQualityFilter,
   minQuality,
   setMinQuality,
-  selectedTags,
-  setSelectedTags,
+  requiredTags,
+  setRequiredTags,
+  excludedTags,
+  setExcludedTags,
 }: QualityClassificationProps) {
   const tagColors: Record<string, string> = {
     "Durable Compounder": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700",
@@ -89,16 +93,20 @@ export function QualityClassification({
         )}
       </div>
 
-      {/* Tag Filter */}
+      {/* Tag Filter - Tri-state: neutral → required → excluded */}
       <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm font-medium text-gray-700 dark:text-gray-300 inline-flex items-center gap-1">
             Filter by Tags
             <QualityTagsInfo />
+            <span className="text-xs text-gray-400 ml-2">(click to cycle: neutral → require → exclude)</span>
           </span>
-          {selectedTags.size > 0 && (
+          {(requiredTags.size > 0 || excludedTags.size > 0) && (
             <button
-              onClick={() => setSelectedTags(new Set())}
+              onClick={() => {
+                setRequiredTags(new Set())
+                setExcludedTags(new Set())
+              }}
               className="text-xs text-indigo-600 hover:text-indigo-500"
             >
               Clear all
@@ -107,30 +115,52 @@ export function QualityClassification({
         </div>
         <div className="flex flex-wrap gap-2">
           {QUALITY_TAGS.map((tag) => {
-            const isSelected = selectedTags.has(tag)
+            const isRequired = requiredTags.has(tag)
+            const isExcluded = excludedTags.has(tag)
+            // Tri-state click handler: neutral → required → excluded → neutral
+            const handleClick = () => {
+              if (!isRequired && !isExcluded) {
+                // neutral → required
+                const next = new Set(requiredTags)
+                next.add(tag)
+                setRequiredTags(next)
+              } else if (isRequired) {
+                // required → excluded
+                const nextRequired = new Set(requiredTags)
+                nextRequired.delete(tag)
+                setRequiredTags(nextRequired)
+                const nextExcluded = new Set(excludedTags)
+                nextExcluded.add(tag)
+                setExcludedTags(nextExcluded)
+              } else {
+                // excluded → neutral
+                const next = new Set(excludedTags)
+                next.delete(tag)
+                setExcludedTags(next)
+              }
+            }
             return (
               <button
                 key={tag}
-                onClick={() => {
-                  const next = new Set(selectedTags)
-                  if (next.has(tag)) next.delete(tag)
-                  else next.add(tag)
-                  setSelectedTags(next)
-                }}
+                onClick={handleClick}
                 className={`px-2 py-1 rounded-full text-xs font-medium border-2 transition-all ${
-                  isSelected
+                  isRequired
                     ? tagColors[tag]
+                    : isExcluded
+                    ? "bg-red-50 text-red-600 border-red-300 dark:bg-red-950 dark:text-red-400 dark:border-red-700 line-through"
                     : "bg-gray-50 text-gray-500 border-gray-200 dark:bg-gray-900 dark:text-gray-500 dark:border-gray-700 hover:border-gray-300"
                 }`}
               >
-                {tag}
+                {isExcluded && "✕ "}{tag}
               </button>
             )
           })}
         </div>
-        {selectedTags.size > 0 && (
+        {(requiredTags.size > 0 || excludedTags.size > 0) && (
           <p className="mt-2 text-xs text-gray-500">
-            Showing stocks with selected tags only, excluding stocks with unselected tags ({selectedTags.size} selected)
+            {requiredTags.size > 0 && `Require: ${Array.from(requiredTags).join(", ")}`}
+            {requiredTags.size > 0 && excludedTags.size > 0 && " | "}
+            {excludedTags.size > 0 && `Exclude: ${Array.from(excludedTags).join(", ")}`}
           </p>
         )}
       </div>

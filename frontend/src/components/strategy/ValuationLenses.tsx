@@ -111,9 +111,13 @@ export function ValuationLenses({
         <span className="text-xs text-gray-500">Independent buy signals - "at least N must pass"</span>
       </div>
 
-      {/* Slider */}
+      {/* Slider - only show when at least one lens is active */}
       <div className="mb-4 flex items-center gap-4">
-        <LensSlider value={minLenses} max={activeLensCount} onChange={setMinLenses} />
+        {activeLensCount === 0 ? (
+          <span className="text-sm text-gray-500 italic">No valuation filters active</span>
+        ) : (
+          <LensSlider value={minLenses} max={activeLensCount} onChange={setMinLenses} />
+        )}
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"

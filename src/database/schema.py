@@ -657,6 +657,73 @@ CREATE TABLE IF NOT EXISTS saved_strategies (
 )
 """
 
+# ============================================================================
+# Portfolio Tracking Tables
+# ============================================================================
+
+PORTFOLIO_BATCHES_TABLE = """
+CREATE TABLE IF NOT EXISTS portfolio_batches (
+    id VARCHAR PRIMARY KEY,
+    name VARCHAR,
+    buy_quarter VARCHAR NOT NULL,
+    strategy_id VARCHAR,
+    holding_period INTEGER NOT NULL DEFAULT 4,
+    total_invested DECIMAL NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR NOT NULL DEFAULT 'active',
+    notes VARCHAR
+)
+"""
+
+PORTFOLIO_POSITIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS portfolio_positions (
+    id VARCHAR PRIMARY KEY,
+    batch_id VARCHAR NOT NULL,
+    symbol VARCHAR NOT NULL,
+    status VARCHAR NOT NULL DEFAULT 'open',
+    invested_amount DECIMAL NOT NULL,
+    target_sell_quarter VARCHAR NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    actual_sell_price DECIMAL,
+    actual_sell_quarter VARCHAR,
+    realized_return DECIMAL,
+    realized_alpha DECIMAL
+)
+"""
+
+POSITION_TRANCHES_TABLE = """
+CREATE TABLE IF NOT EXISTS position_tranches (
+    id VARCHAR PRIMARY KEY,
+    position_id VARCHAR NOT NULL,
+    buy_quarter VARCHAR NOT NULL,
+    buy_price DECIMAL NOT NULL,
+    invested_amount DECIMAL NOT NULL,
+    source_batch_id VARCHAR NOT NULL,
+    tranche_target_sell_quarter VARCHAR NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sell_price DECIMAL,
+    sell_quarter VARCHAR,
+    tranche_return DECIMAL,
+    tranche_alpha DECIMAL
+)
+"""
+
+PORTFOLIO_TRANSACTIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS portfolio_transactions (
+    id VARCHAR PRIMARY KEY,
+    transaction_type VARCHAR NOT NULL,
+    batch_id VARCHAR,
+    position_id VARCHAR,
+    symbol VARCHAR NOT NULL,
+    quarter VARCHAR NOT NULL,
+    price DECIMAL,
+    amount DECIMAL,
+    return_pct DECIMAL,
+    alpha_pct DECIMAL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 ALL_TABLES = [
     ("tickers", TICKERS_TABLE),
     ("company_profiles", COMPANY_PROFILES_TABLE),
@@ -684,6 +751,11 @@ ALL_TABLES = [
     ("recommended_strategies", RECOMMENDED_STRATEGIES_TABLE),
     # User saved strategies
     ("saved_strategies", SAVED_STRATEGIES_TABLE),
+    # Portfolio tracking
+    ("portfolio_batches", PORTFOLIO_BATCHES_TABLE),
+    ("portfolio_positions", PORTFOLIO_POSITIONS_TABLE),
+    ("position_tranches", POSITION_TRANCHES_TABLE),
+    ("portfolio_transactions", PORTFOLIO_TRANSACTIONS_TABLE),
 ]
 
 # Performance indexes for analysis queries
@@ -694,6 +766,12 @@ ALL_INDEXES = [
     ("idx_metrics_period_symbol", "CREATE INDEX IF NOT EXISTS idx_metrics_period_symbol ON key_metrics(period, symbol, fiscal_date DESC)"),
     ("idx_dividends_symbol", "CREATE INDEX IF NOT EXISTS idx_dividends_symbol ON dividends(symbol, ex_date DESC)"),
     ("idx_profiles_quarter", "CREATE INDEX IF NOT EXISTS idx_profiles_quarter ON company_profiles(fiscal_quarter, symbol)"),
+    # Portfolio tracking indexes
+    ("idx_positions_batch", "CREATE INDEX IF NOT EXISTS idx_positions_batch ON portfolio_positions(batch_id)"),
+    ("idx_positions_symbol", "CREATE INDEX IF NOT EXISTS idx_positions_symbol ON portfolio_positions(symbol)"),
+    ("idx_positions_status", "CREATE INDEX IF NOT EXISTS idx_positions_status ON portfolio_positions(status)"),
+    ("idx_tranches_position", "CREATE INDEX IF NOT EXISTS idx_tranches_position ON position_tranches(position_id)"),
+    ("idx_transactions_symbol", "CREATE INDEX IF NOT EXISTS idx_transactions_symbol ON portfolio_transactions(symbol)"),
 ]
 
 

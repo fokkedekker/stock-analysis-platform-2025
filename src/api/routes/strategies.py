@@ -54,7 +54,7 @@ class PipelineSettings(BaseModel):
     net_net_enabled: bool = False
     fama_french_enabled: bool = False
     ff_top_pct: int = 30
-    min_lenses: int = 1
+    min_lenses: int = 0  # Support raw-filter-only strategies
     strict_mode: bool = False
 
     # NEW: Raw factor filters

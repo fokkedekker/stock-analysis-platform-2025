@@ -74,7 +74,8 @@ function GridSearchBuilder({
 
   const [qualityFilter, setQualityFilter] = useState(true);
   const [minQuality, setMinQuality] = useState<QualityLabel>("compounder");
-  const [selectedTags, setSelectedTags] = useState<Set<QualityTag>>(new Set());
+  const [requiredTags, setRequiredTags] = useState<Set<QualityTag>>(new Set());
+  const [excludedTags, setExcludedTags] = useState<Set<QualityTag>>(new Set());
 
   const [minLenses, setMinLenses] = useState(3);
   const [strictMode, setStrictMode] = useState(false);
@@ -139,8 +140,8 @@ function GridSearchBuilder({
       quality: {
         enabled: qualityFilter,
         min_quality: minQuality,
-        required_tags: Array.from(selectedTags),
-        excluded_tags: [],
+        required_tags: Array.from(requiredTags),
+        excluded_tags: Array.from(excludedTags),
       },
       valuation: {
         graham_enabled: lensGraham,
@@ -159,7 +160,7 @@ function GridSearchBuilder({
     };
   }, [
     requireAltman, altmanZone, requirePiotroski, piotroskiMin,
-    qualityFilter, minQuality, selectedTags,
+    qualityFilter, minQuality, requiredTags, excludedTags,
     lensGraham, grahamMode, grahamMin, lensMagicFormula, mfTopPct,
     lensPeg, maxPeg, lensNetNet, lensFamaFrenchBm, ffBmTopPct,
     minLenses, strictMode,
@@ -275,8 +276,10 @@ function GridSearchBuilder({
           setQualityFilter={setQualityFilter}
           minQuality={minQuality}
           setMinQuality={setMinQuality}
-          selectedTags={selectedTags}
-          setSelectedTags={setSelectedTags}
+          requiredTags={requiredTags}
+          setRequiredTags={setRequiredTags}
+          excludedTags={excludedTags}
+          setExcludedTags={setExcludedTags}
         />
 
         <ValuationLenses

@@ -192,7 +192,7 @@ export function createDefaultSettings(): PipelineSettings {
     net_net_enabled: false,
     fama_french_enabled: false,
     ff_top_pct: 30,
-    min_lenses: 1,
+    min_lenses: 0,  // Default to 0 so raw-filter-only strategies work
     strict_mode: false,
     raw_filters: [],
   };

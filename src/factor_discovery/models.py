@@ -116,6 +116,11 @@ class FactorDiscoveryRequest(BaseModel):
         le=4,
         description="Quarters to lag analysis data (1 = use Q1 data for Q2 decisions, prevents look-ahead bias)",
     )
+    # Stability preference
+    prefer_stable_factors: bool = Field(
+        default=False,
+        description="If true, penalize factors with low stability in rankings",
+    )
 
 
 class PortfolioStats(BaseModel):
@@ -127,6 +132,38 @@ class PortfolioStats(BaseModel):
     win_rate: float = Field(..., description="Percentage with positive alpha")
     ci_lower: float = Field(..., description="95% CI lower bound")
     ci_upper: float = Field(..., description="95% CI upper bound")
+
+
+class DecayMetricsPydantic(BaseModel):
+    """Factor stability metrics from rolling window analysis."""
+
+    decay_score: float = Field(
+        ...,
+        ge=0,
+        le=1,
+        description="% of rolling windows with positive alpha (0-1)",
+    )
+    ic_stability: float = Field(
+        ...,
+        ge=0,
+        le=1,
+        description="% of rolling windows with significant IC (0-1)",
+    )
+    alpha_trend: float = Field(
+        ...,
+        ge=-1,
+        le=1,
+        description="Direction of alpha over time (-1 to +1)",
+    )
+    n_windows: int = Field(..., description="Number of rolling windows analyzed")
+    recent_alpha: float | None = Field(
+        default=None,
+        description="Alpha in most recent window",
+    )
+    mean_ic: float | None = Field(
+        default=None,
+        description="Average information coefficient across windows",
+    )
 
 
 class ThresholdResult(BaseModel):
@@ -220,6 +257,12 @@ class FactorResult(BaseModel):
         description="Whether best threshold is FDR-significant",
     )
 
+    # Decay/stability metrics
+    decay_metrics: Optional[DecayMetricsPydantic] = Field(
+        default=None,
+        description="Stability metrics from rolling window analysis",
+    )
+
 
 class FilterSpec(BaseModel):
     """Specification for a single filter in a strategy."""
@@ -304,7 +347,7 @@ class PipelineSettings(BaseModel):
     net_net_enabled: bool = Field(default=False)
     fama_french_enabled: bool = Field(default=False)
     ff_top_pct: int = Field(default=30)
-    min_lenses: int = Field(default=1)
+    min_lenses: int = Field(default=0)  # Default to 0 so raw-filter-only strategies work
     strict_mode: bool = Field(default=False)
 
     # Raw factor filters (factors not mapped to specific UI controls)

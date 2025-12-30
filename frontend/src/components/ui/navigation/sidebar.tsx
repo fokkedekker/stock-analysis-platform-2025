@@ -5,6 +5,7 @@ import { StockSearch } from "@/components/StockSearch"
 import { cx, focusRing } from "@/lib/utils"
 import {
   RiBarChartBoxLine,
+  RiBriefcaseLine,
   RiFilter3Line,
   RiFlaskLine,
   RiLineChartLine,
@@ -26,8 +27,15 @@ import MobileSidebar from "./MobileSidebar"
 
 const navigation = [
   { name: "Pipeline", href: siteConfig.baseLinks.home, icon: RiFilter3Line },
+  { name: "Portfolio", href: siteConfig.baseLinks.portfolio, icon: RiBriefcaseLine },
   { name: "Simulations", href: siteConfig.baseLinks.gridSearch, icon: RiFlaskLine },
-  { name: "Factor Discovery", href: siteConfig.baseLinks.factorDiscovery, icon: RiSearchEyeLine },
+] as const
+
+// Models section
+const models = [
+  { name: "Factor Screening", href: siteConfig.baseLinks.factorScreening, icon: RiSearchEyeLine },
+  { name: "Elastic Net", href: siteConfig.baseLinks.elasticNet, icon: RiLineChartLine },
+  { name: "GAM", href: siteConfig.baseLinks.gam, icon: RiBarChartBoxLine },
 ] as const
 
 // Grouped by pipeline stage
@@ -171,6 +179,9 @@ export function Sidebar() {
                 </li>
               ))}
             </ul>
+
+            {/* Models */}
+            <NavSection title="Models" items={models} isActive={isActive} />
 
             {/* Grouped screeners */}
             <NavSection title="Survival Gates" items={survivalGates} isActive={isActive} />

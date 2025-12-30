@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { RiPlayLine, RiStopLine, RiSaveLine, RiHistoryLine, RiArrowRightLine } from "@remixicon/react";
 import { Button } from "@/components/Button";
 import { ProgressBar } from "@/components/ProgressBar";
+import { InfoTooltip } from "@/components/InfoTooltip";
 import {
   startFactorDiscovery,
   getProgressStream,
@@ -28,6 +29,7 @@ import {
   generateStrategyName,
   formatStrategyDate,
 } from "@/lib/saved-strategies";
+import { DecayScoreBadge } from "@/components/models/DecayMetrics";
 
 type ViewState = "configure" | "running" | "results";
 
@@ -56,7 +58,7 @@ function filtersToSettings(filters: FilterSpec[]): PipelineSettings {
     net_net_enabled: false,
     fama_french_enabled: false,
     ff_top_pct: 30,
-    min_lenses: 1,
+    min_lenses: 0,  // Default to 0 so raw-filter-only strategies work
     strict_mode: false,
     raw_filters: [],
   };
@@ -201,6 +203,9 @@ export default function FactorDiscoveryPage() {
     "boolean",
   ]);
 
+  // Stability preference
+  const [preferStableFactors, setPreferStableFactors] = useState<boolean>(false);
+
   // Category labels and counts for UI
   const CATEGORY_INFO: Record<string, { label: string; count: number }> = {
     scores: { label: "Pre-computed Scores", count: 7 },
@@ -340,6 +345,7 @@ export default function FactorDiscoveryPage() {
           exclude_negative_earnings: excludeNegativeEarnings,
         },
         factor_categories: factorCategories,
+        prefer_stable_factors: preferStableFactors,
       };
 
       const response = await startFactorDiscovery(request);
@@ -569,7 +575,10 @@ export default function FactorDiscoveryPage() {
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
               <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
-                <div className="text-sm text-gray-500 dark:text-gray-400">Expected Alpha</div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Expected Alpha
+                  <InfoTooltip content="Average excess return vs S&P 500. A 5% alpha means this strategy historically beat the market by 5% over the holding period." />
+                </div>
                 <div className={`text-2xl font-bold ${getAlphaColorClass(strategy.expected_alpha)}`}>
                   {strategy.expected_alpha > 0 ? "+" : ""}
                   {strategy.expected_alpha.toFixed(1)}%
@@ -577,11 +586,15 @@ export default function FactorDiscoveryPage() {
                 <div className="text-xs text-gray-500 dark:text-gray-500">
                   95% CI: {strategy.expected_alpha_ci_lower.toFixed(1)}% to{" "}
                   {strategy.expected_alpha_ci_upper.toFixed(1)}%
+                  <InfoTooltip content="95% Confidence Interval. We're 95% sure the true alpha is in this range. Narrow range = precise estimate. Wide range = uncertain. If both bounds are positive, the strategy likely generates real alpha." />
                 </div>
               </div>
 
               <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
-                <div className="text-sm text-gray-500 dark:text-gray-400">Win Rate</div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Win Rate
+                  <InfoTooltip content="Percentage of stocks that beat the S&P 500. 55% means slightly more than half of picks outperformed. Higher is better, but even 55% can be very profitable over many trades." />
+                </div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                   {strategy.expected_win_rate.toFixed(0)}%
                 </div>
@@ -591,7 +604,10 @@ export default function FactorDiscoveryPage() {
               </div>
 
               <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
-                <div className="text-sm text-gray-500 dark:text-gray-400">Sample Size</div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Sample Size
+                  <InfoTooltip content="Number of historical stock-quarter observations that matched this strategy. More observations = more reliable statistics. 1000+ is good." />
+                </div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                   {strategy.sample_size.toLocaleString()}
                 </div>
@@ -601,7 +617,10 @@ export default function FactorDiscoveryPage() {
               </div>
 
               <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
-                <div className="text-sm text-gray-500 dark:text-gray-400">Confidence</div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Confidence
+                  <InfoTooltip content="Overall confidence score combining sample size, CI width, statistical significance, and win rate. Higher = more trustworthy results." />
+                </div>
                 <div className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                   {(strategy.confidence_score * 100).toFixed(0)}%
                 </div>
@@ -639,6 +658,7 @@ export default function FactorDiscoveryPage() {
               <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
                 <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
                   Portfolio Size Comparison
+                  <InfoTooltip content="Compares performance if you only bought the top N stocks per quarter (ranked by your chosen method) instead of all stocks passing the filters. Concentrated portfolios often have higher alpha but more variance." />
                 </h3>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
                   What if you only bought the top N stocks each quarter?
@@ -720,18 +740,27 @@ export default function FactorDiscoveryPage() {
                   </th>
                   <th className="text-right py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
                     Alpha
+                    <InfoTooltip content="Average excess return vs S&P 500. If alpha is 5%, stocks meeting this threshold beat the market by 5% on average over the holding period." />
                   </th>
                   <th className="text-right py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
                     Lift
+                    <InfoTooltip content="How much more likely these stocks are to beat the market vs random. Lift of 1.15x means 15% better odds than picking randomly." />
                   </th>
                   <th className="text-right py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
                     p-value
+                    <InfoTooltip content="Probability this result is due to random chance. p < 0.05 means less than 5% chance it's noise. Lower is better." />
                   </th>
                   <th className="text-center py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
                     FDR
+                    <InfoTooltip content="False Discovery Rate significant. When testing many factors, some will look good by chance. FDR correction filters these out. A checkmark means this result survived the correction." />
+                  </th>
+                  <th className="text-center py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
+                    Stability
+                    <InfoTooltip content="% of 5-year rolling windows with positive alpha. Higher = more consistent. Factors with 80%+ stability are trustworthy. Arrow shows trend direction." />
                   </th>
                   <th className="text-right py-3 px-2 text-sm font-medium text-gray-500 dark:text-gray-400">
                     Sample
+                    <InfoTooltip content="Number of stock-quarter observations meeting this threshold. More observations = more reliable statistics. Prefer 500+ for confidence." />
                   </th>
                 </tr>
               </thead>
@@ -777,6 +806,9 @@ export default function FactorDiscoveryPage() {
                         ) : (
                           <span className="text-gray-400 dark:text-gray-600">—</span>
                         )}
+                      </td>
+                      <td className="py-3 px-2 text-center">
+                        <DecayScoreBadge metrics={factor.decay_metrics} />
                       </td>
                       <td className="py-3 px-2 text-right text-gray-600 dark:text-gray-400">
                         {factor.best_threshold_sample_size?.toLocaleString() || "—"}
@@ -848,6 +880,7 @@ export default function FactorDiscoveryPage() {
                               <span className={`${combo.overfit_ratio < 0.5 ? "text-red-600 dark:text-red-400" : combo.overfit_ratio < 0.7 ? "text-amber-600 dark:text-amber-400" : "text-green-600 dark:text-green-400"}`}>
                                 Overfit: {combo.overfit_ratio.toFixed(2)}x
                                 {combo.overfit_ratio < 0.5 && " ⚠️"}
+                                <InfoTooltip content="Validation alpha / Training alpha. Shows how much performance degrades out-of-sample. 0.8+ is excellent, 0.5-0.7 is acceptable, below 0.5 means the strategy is likely overfit." />
                               </span>
                             )}
                           </div>
@@ -1047,10 +1080,40 @@ export default function FactorDiscoveryPage() {
               </div>
             </div>
 
+            {/* Stability Preferences */}
+            <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg border border-emerald-200 dark:border-emerald-800">
+              <h3 className="text-sm font-semibold text-emerald-900 dark:text-emerald-100 mb-3">
+                Factor Stability
+                <InfoTooltip content="Stability analysis measures how consistently a factor performs over rolling 5-year windows. A factor with 3% alpha and 90% stability is more trustworthy than one with 6% alpha and 40% stability." />
+              </h3>
+              <p className="text-xs text-emerald-700 dark:text-emerald-300 mb-4">
+                Prefer factors that perform consistently over time
+              </p>
+
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={preferStableFactors}
+                  onChange={(e) => setPreferStableFactors(e.target.checked)}
+                  className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <div>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Prefer stable factors
+                  </span>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    When enabled, factor combinations are ranked by stability-adjusted alpha.
+                    Factors with high lift but low stability will be penalized.
+                  </p>
+                </div>
+              </label>
+            </div>
+
             {/* Exclusion Filters */}
             <div className="p-4 bg-red-50 dark:bg-red-950/30 rounded-lg border border-red-200 dark:border-red-800">
               <h3 className="text-sm font-semibold text-red-900 dark:text-red-100 mb-3">
                 Stock Exclusions
+                <InfoTooltip content="Pre-filter stocks before analysis. Excluding distress/penny stocks removes noise and untradeable stocks. These exclusions apply BEFORE factor testing, reducing your universe to investable stocks only." />
               </h3>
               <p className="text-xs text-red-700 dark:text-red-300 mb-4">
                 Exclude certain stocks from the analysis (these will never be considered)
@@ -1179,6 +1242,7 @@ export default function FactorDiscoveryPage() {
             <div className="p-4 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200 dark:border-blue-800">
               <h3 className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-3">
                 Factor Categories
+                <InfoTooltip content="Pre-computed scores (Piotroski, Graham, etc.) are pre-validated combinations. Raw metrics (P/E, ROIC, etc.) let you find patterns the scores might miss, but increase multiple testing risk. Start with scores, expand if needed." />
               </h3>
               <p className="text-xs text-blue-700 dark:text-blue-300 mb-4">
                 Select which factor categories to analyze. More categories = more factors = longer analysis time.
@@ -1243,6 +1307,7 @@ export default function FactorDiscoveryPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Max Factors
+                  <InfoTooltip content="Maximum number of factors to combine in a strategy. More factors = higher overfitting risk. A 4-factor combo that 'works' is likely finding noise, not signal. 2-3 is safest." />
                 </label>
                 <select
                   value={maxFactors}
@@ -1263,6 +1328,7 @@ export default function FactorDiscoveryPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Min Sample Size
+                  <InfoTooltip content="Minimum number of observations (stock-quarter combos) required for a threshold to be valid. Low sample sizes produce unreliable statistics. 500+ is recommended for confidence." />
                 </label>
                 <input
                   type="number"
@@ -1278,6 +1344,7 @@ export default function FactorDiscoveryPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Significance Level
+                  <InfoTooltip content="The p-value threshold for statistical significance. 0.05 = 95% confident the result isn't random chance. 0.01 = 99% confident. Lower is stricter. FDR correction is also applied." />
                 </label>
                 <input
                   type="number"
@@ -1294,6 +1361,7 @@ export default function FactorDiscoveryPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Cost Haircut (%)
+                  <InfoTooltip content="Only show strategies with alpha above this threshold. Accounts for transaction costs, slippage, and implementation drag. 3-4% is realistic. If backtest alpha doesn't clear this, it's not tradeable." />
                 </label>
                 <input
                   type="number"

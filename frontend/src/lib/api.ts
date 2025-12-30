@@ -231,7 +231,8 @@ export interface PipelineParams {
   // Stage 2
   quality_filter?: boolean;
   min_quality?: QualityLabel;
-  quality_tags_filter?: QualityTag[];
+  quality_tags_filter?: QualityTag[];  // Required tags - stock must have ALL of these
+  excluded_quality_tags?: QualityTag[];  // Excluded tags - stock must NOT have any of these
   // Stage 3
   min_valuation_lenses?: number;
   strict_mode?: boolean;
@@ -333,6 +334,9 @@ export async function getPipelineStocks(params: PipelineParams = {}, quarter?: s
   if (params.min_quality) searchParams.set('min_quality', params.min_quality);
   if (params.quality_tags_filter && params.quality_tags_filter.length > 0) {
     searchParams.set('quality_tags_filter', params.quality_tags_filter.join(','));
+  }
+  if (params.excluded_quality_tags && params.excluded_quality_tags.length > 0) {
+    searchParams.set('excluded_quality_tags', params.excluded_quality_tags.join(','));
   }
 
   // Stage 3
@@ -631,5 +635,233 @@ export async function getStrategySignals(
 ): Promise<StrategySignalsResponse> {
   const res = await fetch(`${API_BASE}/strategies/${strategyId}/signals/${symbol}`);
   if (!res.ok) throw new Error('Failed to fetch strategy signals');
+  return res.json();
+}
+
+// ============================================================================
+// Portfolio Tracking
+// ============================================================================
+
+export interface CreateBatchRequest {
+  name?: string;
+  buy_quarter: string;
+  strategy_id?: string;
+  holding_period: number;
+  total_invested: number;
+  symbols: string[];
+  allocations?: Record<string, number>;
+  notes?: string;
+}
+
+export interface SellPositionRequest {
+  sell_quarter: string;
+  sell_price?: number;
+  notes?: string;
+}
+
+export interface SellBatchRequest {
+  sell_quarter: string;
+  notes?: string;
+}
+
+export interface Tranche {
+  id: string;
+  buy_quarter: string;
+  buy_price: number | null;
+  invested_amount: number;
+  tranche_target_sell_quarter: string;
+  source_batch_id: string;
+  created_at: string;
+  current_price?: number | null;
+  unrealized_return?: number | null;
+  unrealized_alpha?: number | null;
+  sell_price?: number | null;
+  sell_quarter?: string | null;
+  realized_return?: number | null;
+  realized_alpha?: number | null;
+}
+
+export interface Position {
+  id: string;
+  batch_id: string;
+  symbol: string;
+  name: string | null;
+  status: 'open' | 'sold';
+  invested_amount: number;
+  target_sell_quarter: string;
+  created_at: string;
+  tranches: Tranche[];
+  total_invested: number;
+  current_price?: number | null;
+  current_value?: number | null;
+  unrealized_return_pct?: number | null;
+  unrealized_alpha_pct?: number | null;
+  days_until_sell?: number | null;
+  realized_return?: number | null;
+  realized_alpha?: number | null;
+}
+
+export interface Batch {
+  id: string;
+  name: string | null;
+  buy_quarter: string;
+  strategy_id: string | null;
+  strategy_name: string | null;
+  holding_period: number;
+  total_invested: number;
+  status: 'active' | 'sold' | 'partial';
+  created_at: string;
+  notes: string | null;
+  positions: Position[];
+  position_count: number;
+  current_value?: number | null;
+  unrealized_return_pct?: number | null;
+  unrealized_alpha_pct?: number | null;
+  target_sell_quarter: string;
+  days_until_sell?: number | null;
+  realized_return?: number | null;
+  realized_alpha?: number | null;
+}
+
+export interface Dashboard {
+  total_invested: number;
+  total_current_value: number | null;
+  total_unrealized_return: number | null;
+  total_unrealized_alpha: number | null;
+  active_batches: Batch[];
+  sold_batches: Batch[];
+  sell_alerts: Position[];
+  total_realized_return: number | null;
+  total_realized_alpha: number | null;
+}
+
+export interface AlertsResponse {
+  alerts: Position[];
+  count: number;
+}
+
+export interface PerformanceByStrategy {
+  strategy_id: string;
+  strategy_name: string;
+  total_trades: number;
+  total_invested: number;
+  total_returned: number;
+  avg_return: number | null;
+  avg_alpha: number | null;
+  win_rate: number | null;
+}
+
+export interface PerformanceResponse {
+  by_strategy: PerformanceByStrategy[];
+  overall_return: number | null;
+  overall_alpha: number | null;
+  overall_win_rate: number | null;
+}
+
+export interface CheckMergeResponse {
+  existing_positions: Record<string, {
+    position_id: string;
+    batch_id: string;
+    batch_name: string;
+    invested_amount: number;
+    target_sell_quarter: string;
+  }>;
+  merge_candidates: string[];
+}
+
+// Portfolio API Functions
+
+export async function createBatch(request: CreateBatchRequest): Promise<Batch> {
+  const res = await fetch(`${API_BASE}/portfolio/batches`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || 'Failed to create batch');
+  }
+  return res.json();
+}
+
+export async function listBatches(status?: string): Promise<Batch[]> {
+  let url = `${API_BASE}/portfolio/batches`;
+  if (status) url += `?status=${status}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to fetch batches');
+  return res.json();
+}
+
+export async function getBatch(batchId: string): Promise<Batch> {
+  const res = await fetch(`${API_BASE}/portfolio/batches/${batchId}`);
+  if (!res.ok) throw new Error('Failed to fetch batch');
+  return res.json();
+}
+
+export async function deleteBatch(batchId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/portfolio/batches/${batchId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to delete batch');
+}
+
+export async function sellBatch(batchId: string, request: SellBatchRequest): Promise<Batch> {
+  const res = await fetch(`${API_BASE}/portfolio/batches/${batchId}/sell`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || 'Failed to sell batch');
+  }
+  return res.json();
+}
+
+export async function deletePosition(positionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/portfolio/positions/${positionId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to delete position');
+}
+
+export async function sellPosition(positionId: string, request: SellPositionRequest): Promise<Position> {
+  const res = await fetch(`${API_BASE}/portfolio/positions/${positionId}/sell`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || 'Failed to sell position');
+  }
+  return res.json();
+}
+
+export async function getDashboard(): Promise<Dashboard> {
+  const res = await fetch(`${API_BASE}/portfolio/dashboard`);
+  if (!res.ok) throw new Error('Failed to fetch dashboard');
+  return res.json();
+}
+
+export async function getAlerts(days = 7): Promise<AlertsResponse> {
+  const res = await fetch(`${API_BASE}/portfolio/alerts?days=${days}`);
+  if (!res.ok) throw new Error('Failed to fetch alerts');
+  return res.json();
+}
+
+export async function getPerformance(): Promise<PerformanceResponse> {
+  const res = await fetch(`${API_BASE}/portfolio/performance`);
+  if (!res.ok) throw new Error('Failed to fetch performance');
+  return res.json();
+}
+
+export async function checkMerge(symbols: string[]): Promise<CheckMergeResponse> {
+  const res = await fetch(`${API_BASE}/portfolio/check-merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(symbols),
+  });
+  if (!res.ok) throw new Error('Failed to check merge');
   return res.json();
 }
