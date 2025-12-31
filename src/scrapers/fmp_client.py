@@ -64,6 +64,8 @@ class FMPClient:
         "ratios": "/stable/ratios",
         "dividends": "/stable/dividends",
         "historical_prices": "/stable/historical-price-eod/full",
+        "treasury_rates": "/stable/treasury-rates",
+        "splits": "/stable/splits",
     }
 
     def __init__(
@@ -351,6 +353,43 @@ class FMPClient:
         # FMP returns {"symbol": "...", "historical": [...]} for this endpoint
         if isinstance(result, dict) and "historical" in result:
             return result["historical"]
+        return result if isinstance(result, list) else []
+
+    async def get_treasury_rates(
+        self,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get historical treasury rates.
+
+        Args:
+            from_date: Start date in YYYY-MM-DD format (optional).
+            to_date: End date in YYYY-MM-DD format (optional).
+
+        Returns:
+            List of daily treasury rate records with date, month1, month3,
+            month6, year1, year2, year5, year10, year30.
+        """
+        params = {}
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+
+        return await self._request(self.ENDPOINTS["treasury_rates"], params=params or None)
+
+    async def get_stock_splits(self, symbol: str) -> list[dict[str, Any]]:
+        """Get stock split history for a symbol.
+
+        Args:
+            symbol: Stock ticker symbol.
+
+        Returns:
+            List of split records with date, numerator, denominator, splitType.
+            Example: {'symbol': 'WKHS', 'date': '2025-12-08', 'numerator': 1, 'denominator': 12}
+            For a 1:12 reverse split, numerator=1, denominator=12 means multiply price by 1/12.
+        """
+        result = await self._request(self.ENDPOINTS["splits"], params={"symbol": symbol})
         return result if isinstance(result, list) else []
 
     async def fetch_endpoint(self, symbol: str, endpoint: str) -> list[dict[str, Any]]:

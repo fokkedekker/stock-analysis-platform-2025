@@ -22,7 +22,8 @@ export type FactorCategory =
   | "efficiency"
   | "stability"
   | "growth"
-  | "scores";
+  | "scores"
+  | "regime";
 
 export interface CategoryInfo {
   id: FactorCategory;
@@ -74,6 +75,11 @@ export const FACTOR_CATEGORIES: CategoryInfo[] = [
     id: "scores",
     label: "Pre-computed Scores",
     description: "Composite scores from valuation systems",
+  },
+  {
+    id: "regime",
+    label: "Market Regimes",
+    description: "Macroeconomic regime factors based on treasury rates",
   },
 ];
 
@@ -425,6 +431,17 @@ export const SCORE_FACTORS: FactorDefinition[] = [
   },
 ];
 
+export const REGIME_FACTORS: FactorDefinition[] = [
+  {
+    name: "rate_momentum",
+    label: "Rate Momentum",
+    category: "regime",
+    direction: ">=",
+    thresholds: [-0.5, -0.25, 0, 0.25, 0.5],
+    description: "10Y Treasury quarter-over-quarter change (percentage points)",
+  },
+];
+
 // ============================================================================
 // All Factors Combined
 // ============================================================================
@@ -438,6 +455,7 @@ export const ALL_FACTORS: FactorDefinition[] = [
   ...STABILITY_FACTORS,
   ...GROWTH_FACTORS,
   ...SCORE_FACTORS,
+  ...REGIME_FACTORS,
 ];
 
 // ============================================================================
@@ -457,6 +475,7 @@ export function getFactorsByCategory(): Record<FactorCategory, FactorDefinition[
     stability: STABILITY_FACTORS,
     growth: GROWTH_FACTORS,
     scores: SCORE_FACTORS,
+    regime: REGIME_FACTORS,
   };
 }
 

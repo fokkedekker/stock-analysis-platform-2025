@@ -13,9 +13,11 @@ from rich.logging import RichHandler
 
 from src.config import get_settings
 from src.database.connection import get_db_manager
+from src.database.schema import create_all_tables
 from src.scrapers.fmp_client import FMPClient
 from src.scrapers.ticker_fetcher import TickerFetcher
 from src.scrapers.data_fetcher import DataFetcher, CheckpointManager
+from src.scrapers.macro_fetcher import MacroFetcher
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -30,6 +32,9 @@ async def main():
     """Run quarterly update."""
     settings = get_settings()
     db = get_db_manager()
+
+    # Ensure all tables exist (including macro tables)
+    create_all_tables()
 
     console.print("[bold blue]Stock Analysis - Quarterly Update[/bold blue]")
     console.print()
@@ -61,6 +66,14 @@ async def main():
     console.print()
 
     async with FMPClient() as client:
+        # Step 0: Update treasury rates for rate regime
+        console.print("[yellow]Step 0: Updating treasury rates...[/yellow]")
+        macro_fetcher = MacroFetcher(client)
+        macro_stats = await macro_fetcher.fetch_all_macro_data()
+        quarters_with_regimes = macro_fetcher.compute_regime_flags()
+        console.print(f"[green]Treasury rates: {macro_stats['treasury_rates']} quarters, rate regimes: {quarters_with_regimes}[/green]")
+        console.print()
+
         # Step 1: Update ticker list
         console.print("[yellow]Step 1: Updating ticker list...[/yellow]")
         ticker_fetcher = TickerFetcher(client)

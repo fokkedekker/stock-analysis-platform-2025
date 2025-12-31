@@ -200,6 +200,7 @@ export default function FactorDiscoveryPage() {
     "raw_dividend",
     "stability",
     "growth",
+    "regime",
     "boolean",
   ]);
 
@@ -217,6 +218,7 @@ export default function FactorDiscoveryPage() {
     raw_dividend: { label: "Dividends", count: 2 },
     stability: { label: "Stability", count: 5 },
     growth: { label: "Growth", count: 4 },
+    regime: { label: "Market Regimes", count: 2 },
     boolean: { label: "Quality Tags", count: 10 },
   };
 

@@ -1127,3 +1127,336 @@ async def screen_combined(
             "count": len(result),
             "stocks": [dict(zip(columns, row)) for row in result],
         }
+
+
+@router.get("/apply-model/{run_id}")
+async def apply_model_to_current(
+    run_id: str,
+    top_percentile: int = Query(20, ge=1, le=100),
+    min_score: float = Query(None, description="Minimum model score (z-score) to include"),
+    quarter: str | None = Query(None, description="Analysis quarter. Defaults to latest."),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """Apply a saved Elastic Net model to current stocks and return ranked predictions.
+
+    This endpoint allows you to use a trained ML model as a filter in the Pipeline.
+    Stocks are scored using the model's coefficients applied to z-scored features.
+
+    Args:
+        run_id: The ML model run ID to apply
+        top_percentile: Only return stocks in top N% by model score
+        min_score: Alternatively, filter by minimum model score (z-score)
+        quarter: Analysis quarter to use for stock data
+        limit: Maximum stocks to return
+    """
+    from src.ml_models import load_elastic_net_result
+
+    db = get_db_manager()
+
+    # Load the model coefficients
+    try:
+        model_data = load_elastic_net_result(run_id)
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Model run {run_id} not found")
+
+    coefficients = {c["feature_name"]: c["coefficient"] for c in model_data["coefficients"]}
+    features_needed = [f for f, c in coefficients.items() if abs(c) > 1e-8]
+
+    if not features_needed:
+        return {
+            "screen": "ml_model",
+            "run_id": run_id,
+            "count": 0,
+            "stocks": [],
+            "error": "Model has no non-zero coefficients",
+        }
+
+    with db.get_connection() as conn:
+        # Get the latest quarter if not specified
+        if not quarter:
+            quarter_row = conn.execute(
+                "SELECT MAX(analysis_quarter) FROM roic_quality_results"
+            ).fetchone()
+            quarter = quarter_row[0] if quarter_row else None
+
+        if not quarter:
+            return {
+                "screen": "ml_model",
+                "run_id": run_id,
+                "count": 0,
+                "stocks": [],
+                "error": "No analysis data available",
+            }
+
+        # Get current stock data with all features matching ELASTIC_NET_FEATURES
+        result = conn.execute(
+            """
+            SELECT
+                t.symbol,
+                t.name,
+                t.sector,
+                t.exchange,
+
+                -- Pre-computed Scores (7)
+                p.f_score as piotroski_score,
+                g.criteria_passed as graham_score,
+                a.z_score as altman_z_score,
+                r.roic,
+                gp.peg_ratio,
+                mf.combined_rank as magic_formula_rank,
+                ff.book_to_market_percentile,
+
+                -- Raw Valuation Metrics (9)
+                km.pe_ratio,
+                km.pb_ratio,
+                km.price_to_sales,
+                km.price_to_free_cash_flow,
+                km.price_to_operating_cash_flow,
+                km.ev_to_ebitda,
+                km.ev_to_sales,
+                km.ev_to_free_cash_flow,
+                km.ev_to_operating_cash_flow,
+
+                -- Raw Profitability Metrics (6)
+                km.roe,
+                km.roa,
+                km.return_on_tangible_assets,
+                km.gross_profit_margin,
+                km.operating_profit_margin,
+                km.net_profit_margin,
+
+                -- Raw Liquidity Metrics (3)
+                km.current_ratio,
+                km.quick_ratio,
+                km.cash_ratio,
+
+                -- Raw Leverage Metrics (5)
+                km.debt_ratio,
+                km.debt_to_equity,
+                km.debt_to_assets,
+                km.net_debt_to_ebitda,
+                km.interest_coverage,
+
+                -- Raw Efficiency Metrics (4)
+                km.asset_turnover,
+                km.inventory_turnover,
+                km.receivables_turnover,
+                km.payables_turnover,
+
+                -- Raw Dividend Metrics (2)
+                km.dividend_yield,
+                km.payout_ratio,
+
+                -- Stability Metrics (5)
+                r.roic_std_dev,
+                r.gross_margin_std_dev,
+                r.fcf_to_net_income,
+                r.reinvestment_rate,
+                r.fcf_yield,
+
+                -- Growth Metrics (4)
+                gp.eps_growth_1yr,
+                gp.eps_growth_3yr,
+                gp.eps_growth_5yr,
+                gp.eps_cagr,
+
+                -- Regime Factors (1)
+                mi.rate_momentum,
+
+                -- Fama-French Percentiles (2)
+                ff.profitability_percentile,
+                ff.asset_growth_percentile,
+
+                -- Additional derived metrics (1)
+                mf.earnings_yield,
+
+                -- Boolean factors (10) - need to derive from quality_tags
+                r.quality_tags,
+                nn.trading_below_ncav,
+                r.fcf_positive_5yr
+
+            FROM tickers t
+            LEFT JOIN (
+                SELECT DISTINCT ON (symbol) *
+                FROM key_metrics
+                WHERE fiscal_date <= (
+                    SELECT MAX(fiscal_date) FROM key_metrics
+                )
+                ORDER BY symbol, fiscal_date DESC
+            ) km ON t.symbol = km.symbol
+            LEFT JOIN roic_quality_results r ON t.symbol = r.symbol AND r.analysis_quarter = ?
+            LEFT JOIN piotroski_results p ON t.symbol = p.symbol AND p.analysis_quarter = ?
+            LEFT JOIN graham_results g ON t.symbol = g.symbol AND g.analysis_quarter = ? AND g.mode = 'modern'
+            LEFT JOIN magic_formula_results mf ON t.symbol = mf.symbol AND mf.analysis_quarter = ?
+            LEFT JOIN garp_peg_results gp ON t.symbol = gp.symbol AND gp.analysis_quarter = ?
+            LEFT JOIN altman_results a ON t.symbol = a.symbol AND a.analysis_quarter = ?
+            LEFT JOIN fama_french_results ff ON t.symbol = ff.symbol AND ff.analysis_quarter = ?
+            LEFT JOIN net_net_results nn ON t.symbol = nn.symbol AND nn.analysis_quarter = ?
+            LEFT JOIN (
+                SELECT DISTINCT ON (indicator_date)
+                    indicator_date,
+                    (treasury_10y - LAG(treasury_10y, 4) OVER (ORDER BY indicator_date)) as rate_momentum
+                FROM macro_indicators
+                ORDER BY indicator_date DESC
+                LIMIT 1
+            ) mi ON TRUE
+            WHERE t.is_active = TRUE
+            """,
+            (quarter, quarter, quarter, quarter, quarter, quarter, quarter, quarter),
+        ).fetchall()
+
+        columns = [desc[0] for desc in conn.description]
+        stocks = [dict(zip(columns, row)) for row in result]
+
+    # Parse boolean tags from quality_tags JSON
+    QUALITY_TAG_MAP = {
+        "Durable Compounder": "has_durable_compounder",
+        "Cash Machine": "has_cash_machine",
+        "Deep Value": "has_deep_value",
+        "Heavy Reinvestor": "has_heavy_reinvestor",
+        "Premium Priced": "has_premium_priced",
+        "Volatile Returns": "has_volatile_returns",
+        "Weak Moat Signal": "has_weak_moat_signal",
+        "Earnings Quality Concern": "has_earnings_quality_concern",
+    }
+
+    for stock in stocks:
+        # Parse quality_tags JSON and set boolean flags
+        quality_tags_json = stock.get("quality_tags")
+        stock_tags = set()
+        if quality_tags_json:
+            try:
+                stock_tags = set(json.loads(quality_tags_json))
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        for tag_name, feature_name in QUALITY_TAG_MAP.items():
+            stock[feature_name] = 1.0 if tag_name in stock_tags else 0.0
+
+        # Convert trading_below_ncav and fcf_positive_5yr to 0/1
+        stock["trading_below_ncav"] = 1.0 if stock.get("trading_below_ncav") else 0.0
+        stock["fcf_positive_5yr"] = 1.0 if stock.get("fcf_positive_5yr") else 0.0
+
+    # Calculate z-scores for each feature across all stocks
+    feature_values: dict[str, list[float]] = {f: [] for f in features_needed}
+    stock_feature_vals: list[dict[str, float | None]] = []
+
+    for stock in stocks:
+        stock_vals = {}
+        for feature in features_needed:
+            val = stock.get(feature)
+            if val is not None:
+                try:
+                    val = float(val)
+                    feature_values[feature].append(val)
+                    stock_vals[feature] = val
+                except (TypeError, ValueError):
+                    stock_vals[feature] = None
+            else:
+                stock_vals[feature] = None
+        stock_feature_vals.append(stock_vals)
+
+    # Calculate mean and std for each feature
+    feature_stats: dict[str, tuple[float, float]] = {}
+    for feature in features_needed:
+        vals = feature_values[feature]
+        if len(vals) > 0:
+            mean = sum(vals) / len(vals)
+            variance = sum((v - mean) ** 2 for v in vals) / len(vals) if len(vals) > 1 else 1.0
+            std = variance ** 0.5 if variance > 0 else 1.0
+            feature_stats[feature] = (mean, std)
+        else:
+            feature_stats[feature] = (0.0, 1.0)
+
+    # Score each stock
+    scored_stocks = []
+    for i, stock in enumerate(stocks):
+        stock_vals = stock_feature_vals[i]
+        score = 0.0
+        features_used = 0
+
+        for feature in features_needed:
+            val = stock_vals.get(feature)
+            if val is not None:
+                mean, std = feature_stats[feature]
+                z_score = (val - mean) / std if std > 0 else 0.0
+                coef = coefficients.get(feature, 0.0)
+                score += z_score * coef
+                features_used += 1
+
+        # Only include stocks with enough features
+        if features_used >= len(features_needed) * 0.5:
+            scored_stocks.append({
+                **stock,
+                "ml_score": score,
+                "features_used": features_used,
+            })
+
+    # Sort by score descending
+    scored_stocks.sort(key=lambda x: x["ml_score"], reverse=True)
+
+    # Apply filters
+    if min_score is not None:
+        scored_stocks = [s for s in scored_stocks if s["ml_score"] >= min_score]
+    elif top_percentile < 100:
+        cutoff_idx = max(1, int(len(scored_stocks) * top_percentile / 100))
+        scored_stocks = scored_stocks[:cutoff_idx]
+
+    # Add rank
+    for i, stock in enumerate(scored_stocks):
+        stock["ml_rank"] = i + 1
+
+    # Apply limit
+    scored_stocks = scored_stocks[:limit]
+
+    return {
+        "screen": "ml_model",
+        "run_id": run_id,
+        "quarter": quarter,
+        "config": {
+            "top_percentile": top_percentile,
+            "min_score": min_score,
+            "features_used": features_needed,
+            "n_coefficients": len([c for c in coefficients.values() if abs(c) > 1e-8]),
+        },
+        "count": len(scored_stocks),
+        "total_scored": len(scored_stocks),
+        "stocks": scored_stocks,
+    }
+
+
+@router.get("/ml-models")
+async def list_ml_models(limit: int = Query(20, ge=1, le=100)):
+    """List available ML models that can be applied to stocks."""
+    db = get_db_manager()
+
+    with db.get_connection() as conn:
+        result = conn.execute(
+            """
+            SELECT id, model_type, created_at, status, holding_period,
+                   train_ic, test_ic, n_features_selected
+            FROM ml_model_runs
+            WHERE status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    return {
+        "models": [
+            {
+                "run_id": row[0],
+                "model_type": row[1],
+                "created_at": str(row[2]) if row[2] else None,
+                "status": row[3],
+                "holding_period": row[4],
+                "train_ic": row[5],
+                "test_ic": row[6],
+                "n_features_selected": row[7] or 0,
+            }
+            for row in result
+        ],
+        "total": len(result),
+    }

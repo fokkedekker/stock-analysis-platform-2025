@@ -24,8 +24,10 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 
 from src.config import get_settings
 from src.database.connection import get_db_manager
+from src.database.schema import create_all_tables
 from src.scrapers.fmp_client import FMPClient
 from src.scrapers.data_fetcher import CheckpointManager, DataFetcher
+from src.scrapers.macro_fetcher import MacroFetcher
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -263,6 +265,29 @@ class HistoricalDataFetcher:
         finally:
             db_conn.close()
 
+    def _calculate_split_adjustment(self, splits: list[dict], price_date: str) -> float:
+        """Calculate split adjustment factor for a given date.
+
+        For each split that occurred AFTER price_date, we multiply by (numerator/denominator).
+        This adjusts historical prices to be comparable with current prices.
+
+        Args:
+            splits: List of split records with date, numerator, denominator
+            price_date: The date of the price in YYYY-MM-DD format
+
+        Returns:
+            Adjustment factor to multiply the raw price by
+        """
+        adjustment = 1.0
+        for split in splits:
+            split_date = split.get("date", "")
+            if split_date > price_date:
+                numerator = split.get("numerator", 1)
+                denominator = split.get("denominator", 1)
+                if denominator != 0:
+                    adjustment *= numerator / denominator
+        return adjustment
+
     async def _fetch_prices_worker(self, queue: asyncio.Queue, stats: dict, stats_lock: asyncio.Lock,
                                     progress: Progress | None, task_id: int | None, worker_id: int) -> None:
         """Worker for fetching historical prices."""
@@ -281,6 +306,9 @@ class HistoricalDataFetcher:
                             stats["skipped"] += 1
                         continue
 
+                    # Fetch splits first to calculate adjustment factors
+                    splits = await self.client.get_stock_splits(symbol)
+
                     prices = await self.client.get_historical_prices(symbol, self.from_date, self.to_date)
 
                     if not prices:
@@ -294,10 +322,21 @@ class HistoricalDataFetcher:
                         if not price_rec:
                             continue
 
-                        price = price_rec.get("adjClose") or price_rec.get("close")
-                        if not price:
+                        # Use close price
+                        raw_price = price_rec.get("close")
+                        if not raw_price:
                             continue
-                        price = float(price)
+                        raw_price = float(raw_price)
+
+                        # Apply split adjustment to get price in today's terms
+                        price_date = price_rec.get("date", quarter_end.isoformat())
+                        adjustment = self._calculate_split_adjustment(splits, price_date)
+                        price = raw_price * adjustment
+
+                        # Sanity check: reject prices that are still extreme after adjustment
+                        # (legitimate high-priced stocks like BRK.A are ~$700k but most are <$5000)
+                        if price > 100000 or price < 0.0001:
+                            continue
 
                         fin = self._get_financial_data(symbol, quarter_end, db_conn)
                         pe = price / fin["eps"] if fin["eps"] and fin["eps"] > 0 else None
@@ -326,6 +365,15 @@ class HistoricalDataFetcher:
         """Fetch all historical data for all symbols."""
         settings = get_settings()
         self.checkpoint.start_session()
+
+        # Phase 0: Fetch macro indicators (treasury rates for rate regime)
+        console.print("\n[bold cyan]Phase 0: Fetching treasury rates[/bold cyan]")
+
+        macro_fetcher = MacroFetcher(self.client)
+        macro_stats = await macro_fetcher.fetch_all_macro_data(self.from_date, self.to_date)
+        quarters_with_regimes = macro_fetcher.compute_regime_flags()
+        console.print(f"  Treasury rates: {macro_stats['treasury_rates']} quarters")
+        console.print(f"  Rate regimes computed: {quarters_with_regimes} quarters")
 
         # Phase 1: Fetch financial statements
         console.print("\n[bold cyan]Phase 1: Fetching financial statements[/bold cyan]")
@@ -444,6 +492,9 @@ async def main(quarters: list[tuple[str, date]], force_update: bool = False,
                skip_confirm: bool = False, dry_run: bool = False, fresh: bool = False):
     settings = get_settings()
     checkpoint_path = Path("data/historical_checkpoint.json")
+
+    # Ensure all tables exist (including new macro tables)
+    create_all_tables()
 
     # Calculate required financial data limit
     financial_limit = calculate_required_limit(quarters)

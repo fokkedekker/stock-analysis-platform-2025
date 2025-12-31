@@ -380,11 +380,6 @@ class FactorDiscoveryRunner:
                     result = future.result()
                     if result:
                         results[hp].append(result)
-                        # Debug: Log decay metrics status for each factor
-                        if result.decay_metrics:
-                            print(f"[MAIN] {factor_name} {hp}Q: decay_score={result.decay_metrics.decay_score:.2f}, n_windows={result.decay_metrics.n_windows}", flush=True)
-                        else:
-                            print(f"[MAIN] {factor_name} {hp}Q: decay_metrics=None", flush=True)
                 except Exception as e:
                     logger.error(f"Task failed for {factor_name} {hp}Q: {e}")
 
@@ -402,14 +397,9 @@ class FactorDiscoveryRunner:
                     executor.shutdown(wait=False, cancel_futures=True)
                     break
 
-        # Log summary and debug quarters available for decay
+        # Log summary
         for hp in holding_periods:
             logger.info(f"Holding period {hp}Q: {len(results[hp])} factors analyzed")
-            hp_data = data_by_hp.get(hp, [])
-            if hp_data:
-                quarters_in_data = sorted(set(d.get("buy_quarter", "") for d in hp_data))
-                print(f"[MAIN] HP {hp}Q data has {len(hp_data)} obs across {len(quarters_in_data)} quarters", flush=True)
-                print(f"[MAIN] HP {hp}Q quarters: {quarters_in_data[:3]}...{quarters_in_data[-3:] if len(quarters_in_data) > 3 else ''}", flush=True)
 
         return results
 

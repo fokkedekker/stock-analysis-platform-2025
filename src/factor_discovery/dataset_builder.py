@@ -280,6 +280,17 @@ class DatasetBuilder:
                         stock_return = ((sell_price - buy_price) / buy_price) * 100
                         alpha = stock_return - spy_return
 
+                        # Filter extreme returns (likely data errors from stock splits, etc.)
+                        # Cap at +300% and -90% per holding period to avoid corrupted data
+                        max_return = 300.0  # +300% max
+                        min_return = -90.0  # -90% min (near total loss)
+                        if stock_return > max_return or stock_return < min_return:
+                            logger.debug(
+                                f"Filtering extreme return: {symbol} {quarter}->{sell_quarter}: "
+                                f"{stock_return:.1f}% (buy={buy_price:.2f}, sell={sell_price:.2f})"
+                            )
+                            continue
+
                         # Check exclusion filters
                         if self._should_exclude(data, buy_price):
                             continue
@@ -480,7 +491,11 @@ class DatasetBuilder:
                 km.receivables_turnover,
                 km.payables_turnover,
                 km.dividend_yield,
-                km.payout_ratio
+                km.payout_ratio,
+
+                -- Regime factors (only rate-based, CPI/GDP data unavailable historically)
+                rf.rate_regime,
+                rf.rate_change_qoq
 
             FROM tickers t
             LEFT JOIN altman_results a ON t.symbol = a.symbol
@@ -521,9 +536,11 @@ class DatasetBuilder:
                 WHERE fiscal_date <= ?
                 ORDER BY symbol, fiscal_date DESC
             ) km ON t.symbol = km.symbol
+            -- Regime flags by quarter
+            LEFT JOIN regime_flags rf ON rf.quarter = ?
             WHERE t.is_active = TRUE
             """,
-            (quarter,) * 9 + (quarter_end,),
+            (quarter,) * 9 + (quarter_end,) + (quarter,),
         ).fetchall()
 
         columns = [desc[0] for desc in conn.description]
@@ -593,6 +610,8 @@ class DatasetBuilder:
                 # Key metrics - dividends
                 "dividend_yield",
                 "payout_ratio",
+                # Regime factors (numerical)
+                "rate_change_qoq",
             ]:
                 if key in record:
                     record[key] = _to_float(record[key])
@@ -747,6 +766,12 @@ class DatasetBuilder:
         # =====================================================================
         obs["sector"] = data.get("sector")
         obs["name"] = data.get("name")
+
+        # =====================================================================
+        # Regime factors (only rate-based, CPI/GDP data unavailable historically)
+        # =====================================================================
+        obs["rate_regime"] = data.get("rate_regime")
+        obs["rate_momentum"] = data.get("rate_change_qoq")
 
         return obs
 

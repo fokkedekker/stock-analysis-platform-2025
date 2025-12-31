@@ -76,6 +76,32 @@ def get_symbols() -> list[str]:
         return [row[0] for row in result]
 
 
+def generate_quarter_range(from_q: str, to_q: str) -> list[str]:
+    """Generate list of quarters from start to end (inclusive), most recent first."""
+    import re
+
+    def parse_quarter(q: str) -> tuple[int, int]:
+        match = re.match(r'^(\d{4})Q([1-4])$', q.upper())
+        if not match:
+            raise ValueError(f"Invalid quarter format: {q}")
+        return int(match.group(1)), int(match.group(2))
+
+    from_year, from_qtr = parse_quarter(from_q)
+    to_year, to_qtr = parse_quarter(to_q)
+
+    quarters = []
+    year, qtr = from_year, from_qtr
+
+    while (year, qtr) <= (to_year, to_qtr):
+        quarters.append(f"{year}Q{qtr}")
+        qtr += 1
+        if qtr > 4:
+            qtr = 1
+            year += 1
+
+    return list(reversed(quarters))  # Most recent first
+
+
 def get_available_quarters() -> list[str]:
     """Get list of quarters that have financial data (from statements, not profiles).
 
@@ -97,7 +123,6 @@ def get_available_quarters() -> list[str]:
             WHERE period = 'quarter'
             AND fiscal_date IS NOT NULL
             ORDER BY quarter DESC
-            LIMIT 8
             """
         ).fetchall()
         return [row[0] for row in result]
@@ -172,6 +197,27 @@ Examples:
         type=str,
         metavar="QUARTER",
         help="Quarter to analyze (e.g., 2024Q3). Default: current quarter",
+    )
+    parser.add_argument(
+        "--quarters",
+        type=str,
+        nargs="+",
+        metavar="QUARTER",
+        help="List of quarters to analyze (e.g., 2010Q1 2010Q2 2010Q3)",
+    )
+    parser.add_argument(
+        "--from",
+        dest="from_quarter",
+        type=str,
+        metavar="QUARTER",
+        help="Start quarter for range (e.g., 2010Q1). Use with --to",
+    )
+    parser.add_argument(
+        "--to",
+        dest="to_quarter",
+        type=str,
+        metavar="QUARTER",
+        help="End quarter for range (e.g., 2025Q4). Use with --from",
     )
     parser.add_argument(
         "--all-quarters",
@@ -368,7 +414,13 @@ def main():
     console.print(f"Symbols to analyze: {len(symbols)}")
 
     # Determine which quarters to analyze
-    if args.all_quarters:
+    if args.quarters:
+        quarters = [q.upper() for q in args.quarters]
+        console.print(f"Quarters to analyze: {', '.join(quarters[:5])}{'...' if len(quarters) > 5 else ''} ({len(quarters)} quarters)")
+    elif args.from_quarter and args.to_quarter:
+        quarters = generate_quarter_range(args.from_quarter, args.to_quarter)
+        console.print(f"Quarters to analyze: {args.from_quarter} to {args.to_quarter} ({len(quarters)} quarters)")
+    elif args.all_quarters:
         quarters = get_available_quarters()
         if not quarters:
             console.print("[red]No quarters found in income_statements. Run initial_load.py first.[/red]")

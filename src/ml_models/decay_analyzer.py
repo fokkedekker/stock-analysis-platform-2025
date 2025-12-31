@@ -82,22 +82,18 @@ class DecayAnalyzer:
         Returns:
             DecayMetrics if enough data, None otherwise
         """
-        print(f"[DECAY] Analyzing {factor_name} for {holding_period}Q, threshold={threshold}, op={operator}", flush=True)
-
         # Filter to correct holding period
         filtered_obs = [
             o for o in observations if o.get("holding_period") == holding_period
         ]
 
         if len(filtered_obs) < self.window_quarters * 10:
-            print(f"[DECAY] Skip {factor_name}: {len(filtered_obs)} obs < {self.window_quarters * 10} required", flush=True)
             return None  # Not enough data
 
         # Get unique quarters sorted chronologically
         quarters = sorted(set(o.get("buy_quarter", "") for o in filtered_obs))
 
         if len(quarters) < self.window_quarters:
-            print(f"[DECAY] Skip {factor_name}: {len(quarters)} quarters < {self.window_quarters} required", flush=True)
             return None  # Not enough quarters for rolling analysis
 
         # Compute rolling statistics

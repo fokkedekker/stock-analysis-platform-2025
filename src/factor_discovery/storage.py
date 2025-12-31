@@ -12,6 +12,7 @@ from src.database.connection import get_db_manager
 
 from .models import (
     CombinedStrategyResult,
+    DecayMetricsPydantic,
     FactorDiscoveryRequest,
     FactorDiscoveryResult,
     FactorDiscoverySummary,
@@ -96,6 +97,9 @@ class FactorDiscoveryStorage:
             [t.model_dump() for t in factor.threshold_results]
         )
 
+        # Extract decay metrics
+        dm = factor.decay_metrics
+
         conn.execute(
             """
             INSERT INTO factor_results (
@@ -103,8 +107,10 @@ class FactorDiscoveryStorage:
                 correlation, correlation_pvalue, threshold_results,
                 best_threshold, best_threshold_alpha, best_threshold_lift,
                 best_threshold_pvalue, best_threshold_sample_size,
-                best_threshold_ci_lower, best_threshold_ci_upper
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                best_threshold_ci_lower, best_threshold_ci_upper,
+                decay_score, decay_ic_stability, decay_alpha_trend,
+                decay_n_windows, decay_recent_alpha, decay_mean_ic
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (run_id, holding_period, factor_name) DO UPDATE SET
                 correlation = EXCLUDED.correlation,
                 correlation_pvalue = EXCLUDED.correlation_pvalue,
@@ -115,7 +121,13 @@ class FactorDiscoveryStorage:
                 best_threshold_pvalue = EXCLUDED.best_threshold_pvalue,
                 best_threshold_sample_size = EXCLUDED.best_threshold_sample_size,
                 best_threshold_ci_lower = EXCLUDED.best_threshold_ci_lower,
-                best_threshold_ci_upper = EXCLUDED.best_threshold_ci_upper
+                best_threshold_ci_upper = EXCLUDED.best_threshold_ci_upper,
+                decay_score = EXCLUDED.decay_score,
+                decay_ic_stability = EXCLUDED.decay_ic_stability,
+                decay_alpha_trend = EXCLUDED.decay_alpha_trend,
+                decay_n_windows = EXCLUDED.decay_n_windows,
+                decay_recent_alpha = EXCLUDED.decay_recent_alpha,
+                decay_mean_ic = EXCLUDED.decay_mean_ic
             """,
             (
                 run_id,
@@ -132,6 +144,12 @@ class FactorDiscoveryStorage:
                 factor.best_threshold_sample_size,
                 factor.best_threshold_ci_lower,
                 factor.best_threshold_ci_upper,
+                dm.decay_score if dm else None,
+                dm.ic_stability if dm else None,
+                dm.alpha_trend if dm else None,
+                dm.n_windows if dm else None,
+                dm.recent_alpha if dm else None,
+                dm.mean_ic if dm else None,
             ),
         )
 
@@ -314,7 +332,9 @@ class FactorDiscoveryStorage:
                    correlation, correlation_pvalue, threshold_results,
                    best_threshold, best_threshold_alpha, best_threshold_lift,
                    best_threshold_pvalue, best_threshold_sample_size,
-                   best_threshold_ci_lower, best_threshold_ci_upper
+                   best_threshold_ci_lower, best_threshold_ci_upper,
+                   decay_score, decay_ic_stability, decay_alpha_trend,
+                   decay_n_windows, decay_recent_alpha, decay_mean_ic
             FROM factor_results
             WHERE run_id = ?
             ORDER BY holding_period, factor_name
@@ -339,6 +359,12 @@ class FactorDiscoveryStorage:
                         "best_threshold_sample_size",
                         "best_threshold_ci_lower",
                         "best_threshold_ci_upper",
+                        "decay_score",
+                        "decay_ic_stability",
+                        "decay_alpha_trend",
+                        "decay_n_windows",
+                        "decay_recent_alpha",
+                        "decay_mean_ic",
                     ],
                     row,
                 )
@@ -347,6 +373,18 @@ class FactorDiscoveryStorage:
             # Parse threshold results
             threshold_data = json.loads(data["threshold_results"] or "[]")
             threshold_results = [ThresholdResult(**t) for t in threshold_data]
+
+            # Parse decay metrics if present
+            decay_metrics = None
+            if data.get("decay_score") is not None:
+                decay_metrics = DecayMetricsPydantic(
+                    decay_score=data["decay_score"],
+                    ic_stability=data["decay_ic_stability"],
+                    alpha_trend=data["decay_alpha_trend"],
+                    n_windows=data["decay_n_windows"],
+                    recent_alpha=data["decay_recent_alpha"],
+                    mean_ic=data["decay_mean_ic"],
+                )
 
             factor = FactorResult(
                 factor_name=data["factor_name"],
@@ -362,6 +400,7 @@ class FactorDiscoveryStorage:
                 best_threshold_sample_size=data["best_threshold_sample_size"],
                 best_threshold_ci_lower=data["best_threshold_ci_lower"],
                 best_threshold_ci_upper=data["best_threshold_ci_upper"],
+                decay_metrics=decay_metrics,
             )
 
             hp = data["holding_period"]

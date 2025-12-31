@@ -503,6 +503,18 @@ class FactorAnalyzer:
     }
 
     # =========================================================================
+    # Regime Factors (numerical from macro_indicators)
+    # =========================================================================
+    REGIME_NUMERICAL_FACTORS = {
+        "rate_momentum": {
+            "thresholds": [-0.5, -0.25, 0, 0.25, 0.5],
+            "direction": ">=",
+            "label": "Rate Momentum (10Y change)",
+            "category": "regime",
+        },
+    }
+
+    # =========================================================================
     # Combined: All Numerical Factors
     # =========================================================================
     NUMERICAL_FACTORS = {
@@ -515,6 +527,7 @@ class FactorAnalyzer:
         **RAW_DIVIDEND_FACTORS,
         **STABILITY_FACTORS,
         **GROWTH_FACTORS,
+        **REGIME_NUMERICAL_FACTORS,
     }
 
     # =========================================================================
@@ -530,6 +543,7 @@ class FactorAnalyzer:
         {"id": "raw_dividend", "label": "Dividends", "count": len(RAW_DIVIDEND_FACTORS)},
         {"id": "stability", "label": "Stability", "count": len(STABILITY_FACTORS)},
         {"id": "growth", "label": "Growth", "count": len(GROWTH_FACTORS)},
+        {"id": "regime", "label": "Market Regimes", "count": 2},  # rate_regime + rate_momentum
         {"id": "boolean", "label": "Quality Tags", "count": 10},  # Boolean factors
     ]
 
@@ -538,6 +552,11 @@ class FactorAnalyzer:
             "categories": ["safe", "grey", "distress"],
             "label": "Altman Zone",
             "category": "scores",
+        },
+        "rate_regime": {
+            "categories": ["rising", "stable", "falling"],
+            "label": "Rate Regime",
+            "category": "regime",
         },
     }
 
@@ -715,7 +734,6 @@ class FactorAnalyzer:
                 if len(parts) == 2:
                     operator = parts[0]
                     threshold_value = float(parts[1])
-                    print(f"[DECAY] Calling decay for numerical {factor_name}, threshold={threshold_value}, op={operator}, data_len={len(data)}", flush=True)
                     decay_result = compute_factor_decay(
                         observations=data,
                         factor_name=factor_name,
@@ -723,7 +741,6 @@ class FactorAnalyzer:
                         operator=operator,
                         holding_period=holding_period,
                     )
-                    print(f"[DECAY] Result for {factor_name}: {decay_result}", flush=True)
                     if decay_result is not None:
                         decay_metrics_pydantic = DecayMetricsPydantic(
                             decay_score=decay_result.decay_score,
@@ -1024,7 +1041,6 @@ class FactorAnalyzer:
                     operator = "not_has"
                     threshold_value = False
 
-                print(f"[DECAY] Calling decay for boolean {factor_name}, threshold={best.threshold}, op={operator}, data_len={len(data)}", flush=True)
                 decay_result = compute_factor_decay(
                     observations=data,
                     factor_name=factor_name,

@@ -526,6 +526,37 @@ CREATE TABLE IF NOT EXISTS spy_prices (
 )
 """
 
+# ============================================================================
+# Macroeconomic Regime Tables
+# ============================================================================
+
+MACRO_INDICATORS_TABLE = """
+CREATE TABLE IF NOT EXISTS macro_indicators (
+    quarter VARCHAR PRIMARY KEY,
+    indicator_date DATE,
+    treasury_1m DECIMAL,
+    treasury_3m DECIMAL,
+    treasury_6m DECIMAL,
+    treasury_1y DECIMAL,
+    treasury_2y DECIMAL,
+    treasury_5y DECIMAL,
+    treasury_10y DECIMAL,
+    treasury_30y DECIMAL,
+    yield_curve_spread DECIMAL,
+    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    raw_json JSON
+)
+"""
+
+REGIME_FLAGS_TABLE = """
+CREATE TABLE IF NOT EXISTS regime_flags (
+    quarter VARCHAR PRIMARY KEY,
+    computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    rate_regime VARCHAR,
+    rate_change_qoq DECIMAL
+)
+"""
+
 # Grid search results table
 GRID_SEARCHES_TABLE = """
 CREATE TABLE IF NOT EXISTS grid_searches (
@@ -590,6 +621,13 @@ CREATE TABLE IF NOT EXISTS factor_results (
     best_threshold_sample_size INTEGER,
     best_threshold_ci_lower DOUBLE,
     best_threshold_ci_upper DOUBLE,
+    -- Decay metrics (rolling window stability)
+    decay_score DOUBLE,
+    decay_ic_stability DOUBLE,
+    decay_alpha_trend DOUBLE,
+    decay_n_windows INTEGER,
+    decay_recent_alpha DOUBLE,
+    decay_mean_ic DOUBLE,
     PRIMARY KEY (run_id, holding_period, factor_name)
 )
 """
@@ -630,6 +668,67 @@ CREATE TABLE IF NOT EXISTS recommended_strategies (
     -- Explanation
     key_factors JSON,
     PRIMARY KEY (run_id, holding_period)
+)
+"""
+
+# ============================================================================
+# ML Model Tables (Elastic Net, GAM, etc.)
+# ============================================================================
+
+ML_MODEL_RUNS_TABLE = """
+CREATE TABLE IF NOT EXISTS ml_model_runs (
+    id VARCHAR PRIMARY KEY,
+    model_type VARCHAR NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    status VARCHAR NOT NULL DEFAULT 'running',
+    holding_period INTEGER NOT NULL,
+    train_end_quarter VARCHAR NOT NULL,
+    test_start_quarter VARCHAR NOT NULL,
+    config_json JSON NOT NULL,
+    train_ic DOUBLE,
+    test_ic DOUBLE,
+    n_train_samples INTEGER,
+    n_test_samples INTEGER,
+    best_alpha DOUBLE,
+    best_l1_ratio DOUBLE,
+    n_features_selected INTEGER,
+    duration_seconds DOUBLE,
+    error_message VARCHAR
+)
+"""
+
+ML_MODEL_COEFFICIENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS ml_model_coefficients (
+    run_id VARCHAR NOT NULL,
+    feature_name VARCHAR NOT NULL,
+    coefficient DOUBLE NOT NULL,
+    coefficient_std DOUBLE,
+    stability_score DOUBLE,
+    feature_importance_rank INTEGER,
+    PRIMARY KEY (run_id, feature_name)
+)
+"""
+
+ML_MODEL_IC_HISTORY_TABLE = """
+CREATE TABLE IF NOT EXISTS ml_model_ic_history (
+    run_id VARCHAR NOT NULL,
+    quarter VARCHAR NOT NULL,
+    ic DOUBLE NOT NULL,
+    ic_pvalue DOUBLE,
+    n_samples INTEGER,
+    PRIMARY KEY (run_id, quarter)
+)
+"""
+
+ML_MODEL_PREDICTIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS ml_model_predictions (
+    run_id VARCHAR NOT NULL,
+    symbol VARCHAR NOT NULL,
+    quarter VARCHAR NOT NULL,
+    predicted_alpha DOUBLE NOT NULL,
+    predicted_rank INTEGER,
+    PRIMARY KEY (run_id, symbol, quarter)
 )
 """
 
@@ -743,12 +842,20 @@ ALL_TABLES = [
     ("stock_rankings", STOCK_RANKINGS_TABLE),
     ("fetch_log", FETCH_LOG_TABLE),
     ("spy_prices", SPY_PRICES_TABLE),
+    # Macro regime tables
+    ("macro_indicators", MACRO_INDICATORS_TABLE),
+    ("regime_flags", REGIME_FLAGS_TABLE),
     ("grid_searches", GRID_SEARCHES_TABLE),
     # Factor Discovery tables
     ("factor_analysis_runs", FACTOR_ANALYSIS_RUNS_TABLE),
     ("factor_results", FACTOR_RESULTS_TABLE),
     ("combined_strategy_results", COMBINED_STRATEGY_RESULTS_TABLE),
     ("recommended_strategies", RECOMMENDED_STRATEGIES_TABLE),
+    # ML Model tables
+    ("ml_model_runs", ML_MODEL_RUNS_TABLE),
+    ("ml_model_coefficients", ML_MODEL_COEFFICIENTS_TABLE),
+    ("ml_model_ic_history", ML_MODEL_IC_HISTORY_TABLE),
+    ("ml_model_predictions", ML_MODEL_PREDICTIONS_TABLE),
     # User saved strategies
     ("saved_strategies", SAVED_STRATEGIES_TABLE),
     # Portfolio tracking
