@@ -10,6 +10,7 @@ import {
   RiFlaskLine,
   RiLineChartLine,
   RiMoonLine,
+  RiNodeTree,
   RiPercentLine,
   RiScales3Line,
   RiSearchEyeLine,
@@ -36,6 +37,7 @@ const models = [
   { name: "Factor Screening", href: siteConfig.baseLinks.factorScreening, icon: RiSearchEyeLine },
   { name: "Elastic Net", href: siteConfig.baseLinks.elasticNet, icon: RiLineChartLine },
   { name: "GAM", href: siteConfig.baseLinks.gam, icon: RiBarChartBoxLine },
+  { name: "LightGBM", href: siteConfig.baseLinks.lightgbm, icon: RiNodeTree },
 ] as const
 
 // Grouped by pipeline stage

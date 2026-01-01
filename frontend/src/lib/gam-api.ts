@@ -1,7 +1,7 @@
 /**
- * Elastic Net API Client
+ * GAM API Client
  *
- * Handles all API calls to the Elastic Net ML model backend.
+ * Handles all API calls to the GAM ML model backend.
  */
 
 const API_BASE = "http://localhost:8000/api/v1";
@@ -10,15 +10,16 @@ const API_BASE = "http://localhost:8000/api/v1";
 // Types
 // ============================================================================
 
-export interface ElasticNetRequest {
+export interface GAMRequest {
   quarters: string[];
   holding_period: number;
   train_end_quarter?: string | null;
   features?: string[] | null;
-  l1_ratios?: number[] | null;
+  n_splines: number;
+  lam: number;
   cv_folds: number;
   winsorize_percentile: number;
-  target_type?: string; // "raw", "beta_adjusted", "sector_adjusted", "full_adjusted"
+  target_type?: string;
 }
 
 export interface RunResponse {
@@ -37,11 +38,14 @@ export interface ProgressUpdate {
   result_run_id?: string;
 }
 
-export interface CoefficientResult {
+export interface PartialDependence {
   feature_name: string;
-  coefficient: number;
-  coefficient_std: number;
-  stability_score: number;
+  x_values: number[];
+  y_values: number[];
+  optimal_min: number | null;
+  optimal_max: number | null;
+  peak_x: number | null;
+  peak_y: number;
   importance_rank: number;
 }
 
@@ -58,7 +62,7 @@ export interface StockPrediction {
   predicted_rank: number;
 }
 
-export interface ElasticNetResult {
+export interface GAMResult {
   run_id: string;
   status: string;
   error_message: string | null;
@@ -66,17 +70,17 @@ export interface ElasticNetResult {
   // Performance metrics
   train_ic: number | null;
   test_ic: number | null;
+  train_r2: number | null;
   n_train_samples: number;
   n_test_samples: number;
   // Model parameters
-  best_alpha: number | null;
-  best_l1_ratio: number | null;
-  n_features_selected: number;
+  n_features: number;
+  best_lam: number | null;
   // Config
   holding_period: number;
   train_end_quarter: string | null;
   // Data
-  coefficients: CoefficientResult[];
+  partial_dependences: PartialDependence[];
   ic_history: ICHistoryPoint[];
   predictions: StockPrediction[];
 }
@@ -88,7 +92,7 @@ export interface RunSummary {
   holding_period: number;
   train_ic: number | null;
   test_ic: number | null;
-  n_features_selected: number;
+  n_features: number;
 }
 
 export interface FeaturesResponse {
@@ -101,12 +105,10 @@ export interface FeaturesResponse {
 // ============================================================================
 
 /**
- * Start a new Elastic Net training run.
+ * Start a new GAM training run.
  */
-export async function startElasticNet(
-  request: ElasticNetRequest
-): Promise<RunResponse> {
-  const response = await fetch(`${API_BASE}/elastic-net/run`, {
+export async function startGAM(request: GAMRequest): Promise<RunResponse> {
+  const response = await fetch(`${API_BASE}/gam/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
@@ -114,7 +116,7 @@ export async function startElasticNet(
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Failed to start Elastic Net training: ${error}`);
+    throw new Error(`Failed to start GAM training: ${error}`);
   }
 
   return response.json();
@@ -122,17 +124,16 @@ export async function startElasticNet(
 
 /**
  * Get progress updates via Server-Sent Events.
- * Returns an EventSource that emits ProgressUpdate objects.
  */
 export function getProgressStream(runId: string): EventSource {
-  return new EventSource(`${API_BASE}/elastic-net/progress/${runId}`);
+  return new EventSource(`${API_BASE}/gam/progress/${runId}`);
 }
 
 /**
- * Get complete results for an Elastic Net run.
+ * Get complete results for a GAM run.
  */
-export async function getResults(runId: string): Promise<ElasticNetResult> {
-  const response = await fetch(`${API_BASE}/elastic-net/results/${runId}`);
+export async function getResults(runId: string): Promise<GAMResult> {
+  const response = await fetch(`${API_BASE}/gam/results/${runId}`);
 
   if (!response.ok) {
     throw new Error(`Failed to get results: ${response.statusText}`);
@@ -142,18 +143,18 @@ export async function getResults(runId: string): Promise<ElasticNetResult> {
 }
 
 /**
- * Get coefficients for a run.
+ * Get partial dependences for a run.
  */
-export async function getCoefficients(
+export async function getPartialDependences(
   runId: string,
   limit = 50
-): Promise<CoefficientResult[]> {
+): Promise<PartialDependence[]> {
   const response = await fetch(
-    `${API_BASE}/elastic-net/coefficients/${runId}?limit=${limit}`
+    `${API_BASE}/gam/partial-dependence/${runId}?limit=${limit}`
   );
 
   if (!response.ok) {
-    throw new Error(`Failed to get coefficients: ${response.statusText}`);
+    throw new Error(`Failed to get partial dependences: ${response.statusText}`);
   }
 
   return response.json();
@@ -163,7 +164,7 @@ export async function getCoefficients(
  * Get IC history for a run.
  */
 export async function getICHistory(runId: string): Promise<ICHistoryPoint[]> {
-  const response = await fetch(`${API_BASE}/elastic-net/ic-history/${runId}`);
+  const response = await fetch(`${API_BASE}/gam/ic-history/${runId}`);
 
   if (!response.ok) {
     throw new Error(`Failed to get IC history: ${response.statusText}`);
@@ -180,7 +181,7 @@ export async function getPredictions(
   limit = 100
 ): Promise<StockPrediction[]> {
   const response = await fetch(
-    `${API_BASE}/elastic-net/predictions/${runId}?limit=${limit}`
+    `${API_BASE}/gam/predictions/${runId}?limit=${limit}`
   );
 
   if (!response.ok) {
@@ -191,10 +192,10 @@ export async function getPredictions(
 }
 
 /**
- * Get list of past Elastic Net runs.
+ * Get list of past GAM runs.
  */
 export async function getHistory(limit = 50): Promise<RunSummary[]> {
-  const response = await fetch(`${API_BASE}/elastic-net/history?limit=${limit}`);
+  const response = await fetch(`${API_BASE}/gam/history?limit=${limit}`);
 
   if (!response.ok) {
     throw new Error(`Failed to get history: ${response.statusText}`);
@@ -207,7 +208,7 @@ export async function getHistory(limit = 50): Promise<RunSummary[]> {
  * Cancel a running training.
  */
 export async function cancelRun(runId: string): Promise<{ status: string; run_id: string }> {
-  const response = await fetch(`${API_BASE}/elastic-net/cancel/${runId}`, {
+  const response = await fetch(`${API_BASE}/gam/cancel/${runId}`, {
     method: "POST",
   });
 
@@ -219,10 +220,10 @@ export async function cancelRun(runId: string): Promise<{ status: string; run_id
 }
 
 /**
- * Get available features for Elastic Net.
+ * Get available features for GAM.
  */
 export async function getFeatures(): Promise<FeaturesResponse> {
-  const response = await fetch(`${API_BASE}/elastic-net/features`);
+  const response = await fetch(`${API_BASE}/gam/features`);
 
   if (!response.ok) {
     throw new Error(`Failed to get features: ${response.statusText}`);
@@ -239,7 +240,6 @@ export async function getFeatures(): Promise<FeaturesResponse> {
  * Format a feature name for display.
  */
 export function formatFeatureName(name: string): string {
-  // Convert snake_case to Title Case
   return name
     .replace(/_/g, " ")
     .replace(/\b\w/g, (l) => l.toUpperCase());
@@ -254,23 +254,6 @@ export function formatIC(ic: number | null): string {
 }
 
 /**
- * Format coefficient for display.
- */
-export function formatCoefficient(coef: number): string {
-  if (Math.abs(coef) < 0.0001) return "~0";
-  return coef.toFixed(4);
-}
-
-/**
- * Get color class based on coefficient value.
- */
-export function getCoefficientColorClass(coef: number): string {
-  if (coef > 0) return "text-green-600 dark:text-green-400";
-  if (coef < 0) return "text-red-600 dark:text-red-400";
-  return "text-gray-600 dark:text-gray-400";
-}
-
-/**
  * Get color class based on IC value.
  */
 export function getICColorClass(ic: number | null): string {
@@ -279,15 +262,6 @@ export function getICColorClass(ic: number | null): string {
   if (ic > 0) return "text-green-500 dark:text-green-300";
   if (ic > -0.05) return "text-red-500 dark:text-red-300";
   return "text-red-600 dark:text-red-400";
-}
-
-/**
- * Get stability badge color.
- */
-export function getStabilityColorClass(stability: number): string {
-  if (stability >= 0.8) return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-  if (stability >= 0.6) return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
-  return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
 }
 
 /**
@@ -303,17 +277,35 @@ export function getStageDisplayName(stage: string): string {
     preprocess: "Preprocessing Features",
     split: "Splitting Train/Test",
     splitting: "Splitting Train/Test",
-    train: "Fitting Model",
-    fitting: "Fitting Model",
-    stability: "Calculating Stability",
-    evaluating: "Evaluating Performance",
+    fitting: "Fitting GAM Model",
+    grid_search: "Optimizing Lambda",
+    partial_dep: "Computing Partial Dependence",
     ic: "Calculating IC History",
-    calculating_stability: "Calculating Stability",
     predict: "Generating Predictions",
-    generating_predictions: "Generating Predictions",
     saving: "Saving Results",
     done: "Complete",
     complete: "Complete",
   };
   return stageNames[stage] || stage;
+}
+
+/**
+ * Format optimal range for display.
+ */
+export function formatOptimalRange(
+  min: number | null,
+  max: number | null
+): string {
+  if (min === null || max === null) return "—";
+  return `${min.toFixed(2)} to ${max.toFixed(2)}`;
+}
+
+/**
+ * Get color class for peak effect.
+ */
+export function getPeakEffectColorClass(peak: number): string {
+  if (peak > 0.01) return "text-green-600 dark:text-green-400";
+  if (peak > 0) return "text-green-500 dark:text-green-300";
+  if (peak > -0.01) return "text-red-500 dark:text-red-300";
+  return "text-red-600 dark:text-red-400";
 }

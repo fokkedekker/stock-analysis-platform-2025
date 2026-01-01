@@ -5,7 +5,7 @@ print("[STARTUP] Loading FastAPI application...", flush=True)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import tickers, financials, analysis, screener, explain, backtest, gridsearch, factor_discovery, strategies, portfolio, elastic_net
+from src.api.routes import tickers, financials, analysis, screener, explain, backtest, gridsearch, factor_discovery, strategies, portfolio, elastic_net, gam, lightgbm
 from src.database.connection import get_db_manager
 
 
@@ -38,6 +38,8 @@ app.include_router(factor_discovery.router, prefix="/api/v1/factor-discovery", t
 app.include_router(strategies.router, prefix="/api/v1/strategies", tags=["Strategies"])
 app.include_router(portfolio.router, prefix="/api/v1/portfolio", tags=["Portfolio"])
 app.include_router(elastic_net.router, prefix="/api/v1/elastic-net", tags=["ML Models"])
+app.include_router(gam.router, prefix="/api/v1/gam", tags=["ML Models"])
+app.include_router(lightgbm.router, prefix="/api/v1/lightgbm", tags=["ML Models"])
 
 
 @app.get("/")

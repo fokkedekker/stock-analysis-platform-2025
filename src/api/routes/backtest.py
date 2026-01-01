@@ -3,11 +3,9 @@
 import logging
 from decimal import Decimal
 
-import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from src.config import get_settings
 from src.database.connection import get_db_manager
 
 logger = logging.getLogger(__name__)
@@ -19,7 +17,25 @@ class BacktestRequest(BaseModel):
 
     symbols: list[str]
     buy_quarter: str  # e.g., "2024Q1"
+    holding_period: int | None = None  # Number of quarters to hold (e.g., 4), None = hold until latest
     benchmark_return: float | None = None  # Manual override
+
+
+def _add_quarters(quarter: str, num_quarters: int) -> str:
+    """Add num_quarters to a quarter string like '2024Q1'."""
+    year = int(quarter[:4])
+    q = int(quarter[5])
+
+    total_quarters = (year * 4) + q + num_quarters
+    new_year = (total_quarters - 1) // 4
+    new_q = ((total_quarters - 1) % 4) + 1
+
+    return f"{new_year}Q{new_q}"
+
+
+def _prev_quarter(quarter: str) -> str:
+    """Get the previous quarter. E.g., '2025Q1' -> '2024Q4'."""
+    return _add_quarters(quarter, -1)
 
 
 class QuarterlyReturn(BaseModel):
@@ -44,8 +60,9 @@ class BacktestResult(BaseModel):
     """Complete backtest simulation result."""
 
     buy_quarter: str
-    latest_quarter: str
+    sell_quarter: str  # When to sell (either holding_period end or latest)
     quarters_held: int
+    holding_period: int | None  # Requested holding period (None = hold until latest)
     stocks: list[StockReturn]
     winners: list[StockReturn]
     losers: list[StockReturn]
@@ -56,13 +73,17 @@ class BacktestResult(BaseModel):
     quarterly_benchmark_returns: list[QuarterlyReturn]
 
 
-def _get_quarters_after(conn, buy_quarter: str) -> list[str]:
-    """Get all quarters after the buy quarter, sorted chronologically."""
+def _get_quarters_from(conn, buy_quarter: str) -> list[str]:
+    """Get all quarters from buy_quarter onwards (inclusive), sorted chronologically.
+
+    When buying 'in Q1 2025', we buy at the START of Q1 (= end of Q4 2024),
+    so Q1 2025 is our first quarter of returns.
+    """
     result = conn.execute(
         """
         SELECT DISTINCT fiscal_quarter
         FROM company_profiles
-        WHERE fiscal_quarter > ?
+        WHERE fiscal_quarter >= ?
         ORDER BY fiscal_quarter ASC
         """,
         (buy_quarter,),
@@ -80,11 +101,16 @@ def _to_float(value) -> float | None:
 
 
 def _calculate_stock_returns(
-    conn, symbol: str, buy_quarter: str, subsequent_quarters: list[str]
+    conn, symbol: str, buy_quarter: str, quarters: list[str]
 ) -> StockReturn | None:
-    """Calculate returns for a single stock across all quarters."""
-    # Get all prices from buy quarter onwards
-    all_quarters = [buy_quarter] + subsequent_quarters
+    """Calculate returns for a single stock across all quarters.
+
+    Buy price is from the PREVIOUS quarter (start of buy_quarter = end of prev quarter).
+    quarters should include buy_quarter onwards.
+    """
+    # Get price from previous quarter (buy price) and all quarters for returns
+    prev_quarter = _prev_quarter(buy_quarter)
+    all_quarters = [prev_quarter] + quarters
     placeholders = ",".join(["?" for _ in all_quarters])
 
     result = conn.execute(
@@ -110,14 +136,14 @@ def _calculate_stock_returns(
         prices[quarter] = _to_float(price)
         name = stock_name
 
-    # Need buy price
-    buy_price = prices.get(buy_quarter)
+    # Buy price is from previous quarter (start of buy_quarter)
+    buy_price = prices.get(prev_quarter)
     if buy_price is None or buy_price == 0:
         return None
 
-    # Calculate progressive returns for each subsequent quarter
+    # Calculate progressive returns for each quarter (including buy_quarter)
     quarterly_returns = []
-    for q in subsequent_quarters:
+    for q in quarters:
         q_price = prices.get(q)
         if q_price is not None:
             return_pct = ((q_price - buy_price) / buy_price) * 100
@@ -127,7 +153,7 @@ def _calculate_stock_returns(
         return None
 
     # Current price is the last available price
-    current_price = prices.get(subsequent_quarters[-1]) if subsequent_quarters else buy_price
+    current_price = prices.get(quarters[-1]) if quarters else buy_price
     total_return = quarterly_returns[-1].return_pct if quarterly_returns else 0
 
     return StockReturn(
@@ -190,108 +216,65 @@ def _create_manual_benchmark(
     return benchmark_returns
 
 
-async def _fetch_sp500_returns(
-    buy_quarter: str, subsequent_quarters: list[str]
+def _get_sp500_returns_from_db(
+    conn, buy_quarter: str, quarters: list[str]
 ) -> list[QuarterlyReturn]:
-    """Fetch S&P 500 (SPY ETF) returns from FMP API."""
-    from datetime import datetime, timedelta
+    """Get S&P 500 (SPY) returns from the spy_prices table.
 
-    settings = get_settings()
-    if not settings.FMP_API_KEY:
-        logger.warning("No FMP_API_KEY, using default benchmark")
-        return _create_manual_benchmark(10.0, subsequent_quarters)
+    Uses actual quarterly SPY prices synced from yfinance.
+    Buy price is from the PREVIOUS quarter (start of buy_quarter = end of prev quarter).
+    quarters should include buy_quarter onwards.
+    """
+    prev_quarter = _prev_quarter(buy_quarter)
+    all_quarters = [prev_quarter] + quarters
+    placeholders = ",".join(["?" for _ in all_quarters])
 
-    # Map quarters to approximate dates (end of quarter)
-    def quarter_to_date(q: str) -> str:
-        year = q[:4]
-        qnum = int(q[-1])
-        month = qnum * 3
-        day = "31" if month in [3, 12] else "30"
-        return f"{year}-{month:02d}-{day}"
+    result = conn.execute(
+        f"""
+        SELECT quarter, price
+        FROM spy_prices
+        WHERE quarter IN ({placeholders})
+        ORDER BY quarter ASC
+        """,
+        all_quarters,
+    ).fetchall()
 
-    try:
-        all_quarters = [buy_quarter] + subsequent_quarters
-        dates = [quarter_to_date(q) for q in all_quarters]
+    if not result:
+        logger.warning(f"No SPY prices found in database for quarters: {all_quarters[:3]}...")
+        return []
 
-        # Calculate date range for the API - go back a bit before buy date
-        from_date = (datetime.strptime(dates[0], "%Y-%m-%d") - timedelta(days=30)).strftime(
-            "%Y-%m-%d"
-        )
-        to_date = (datetime.strptime(dates[-1], "%Y-%m-%d") + timedelta(days=7)).strftime(
-            "%Y-%m-%d"
-        )
+    # Build quarter -> price mapping
+    prices = {row[0]: float(row[1]) for row in result}
 
-        logger.info(f"Fetching SPY data from {from_date} to {to_date}")
+    # Buy price is from previous quarter (start of buy_quarter)
+    buy_price = prices.get(prev_quarter)
+    if not buy_price:
+        logger.warning(f"No SPY price for previous quarter {prev_quarter}")
+        return []
 
-        # Fetch historical price for SPY with date range
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{settings.FMP_BASE_URL}/api/v3/historical-price-full/SPY",
-                params={
-                    "apikey": settings.FMP_API_KEY,
-                    "from": from_date,
-                    "to": to_date,
-                },
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            data = response.json()
+    logger.info(f"SPY buy price for {buy_quarter} (from {prev_quarter}): ${buy_price:.2f}")
 
-        if "historical" not in data or not data["historical"]:
-            logger.warning(f"No historical data for SPY in response: {data.keys()}")
-            return _create_manual_benchmark(10.0, subsequent_quarters)
+    # Calculate returns for each quarter (including buy_quarter)
+    benchmark_returns = []
+    for q in quarters:
+        q_price = prices.get(q)
+        if q_price:
+            return_pct = ((q_price - buy_price) / buy_price) * 100
+            benchmark_returns.append(QuarterlyReturn(quarter=q, return_pct=round(return_pct, 2)))
+            logger.info(f"SPY return for {q}: {return_pct:.2f}% (${q_price:.2f})")
+        else:
+            logger.warning(f"Missing SPY price for quarter {q}")
 
-        logger.info(f"Got {len(data['historical'])} SPY price records")
-
-        # Build date -> price mapping
-        historical = {h["date"]: h["close"] for h in data["historical"]}
-
-        # Find closest price for each date
-        def find_closest_price(target_date: str) -> float | None:
-            # Try exact date first
-            if target_date in historical:
-                return historical[target_date]
-            # Try nearby dates (within 14 days - weekends, holidays)
-            target = datetime.strptime(target_date, "%Y-%m-%d")
-            for delta in range(-14, 15):
-                check_date = (target + timedelta(days=delta)).strftime("%Y-%m-%d")
-                if check_date in historical:
-                    return historical[check_date]
-            logger.warning(f"Could not find SPY price near {target_date}")
-            return None
-
-        # Get buy price
-        buy_price = find_closest_price(dates[0])
-        if not buy_price:
-            logger.warning(f"Could not find SPY price for buy quarter {buy_quarter}")
-            return _create_manual_benchmark(10.0, subsequent_quarters)
-
-        logger.info(f"SPY buy price for {buy_quarter}: ${buy_price:.2f}")
-
-        # Calculate returns for each subsequent quarter
-        benchmark_returns = []
-        for i, q in enumerate(subsequent_quarters):
-            q_price = find_closest_price(dates[i + 1])
-            if q_price:
-                return_pct = ((q_price - buy_price) / buy_price) * 100
-                benchmark_returns.append(QuarterlyReturn(quarter=q, return_pct=round(return_pct, 2)))
-                logger.info(f"SPY return for {q}: {return_pct:.2f}% (${q_price:.2f})")
-
-        if not benchmark_returns:
-            logger.warning("No benchmark returns calculated, using default")
-            return _create_manual_benchmark(10.0, subsequent_quarters)
-
-        return benchmark_returns
-
-    except Exception as e:
-        logger.error(f"Error fetching SPY data: {e}")
-        return _create_manual_benchmark(10.0, subsequent_quarters)
+    return benchmark_returns
 
 
 @router.post("/simulate", response_model=BacktestResult)
 async def simulate_buy(request: BacktestRequest) -> BacktestResult:
     """
     Simulate buying stocks at a historical quarter and calculate returns.
+
+    If holding_period is provided, sells after that many quarters.
+    Otherwise, holds until the latest available quarter.
 
     Returns individual stock performance, portfolio aggregate, and S&P 500 comparison.
     """
@@ -301,15 +284,32 @@ async def simulate_buy(request: BacktestRequest) -> BacktestResult:
     db = get_db_manager()
 
     with db.get_connection() as conn:
-        # 1. Get all quarters after buy_quarter
-        quarters = _get_quarters_after(conn, request.buy_quarter)
+        # 1. Get all quarters from buy_quarter onwards (inclusive)
+        # When buying "in Q1 2025", we buy at START of Q1 (= end of Q4 2024)
+        # so Q1 2025 is our first quarter of returns
+        all_quarters = _get_quarters_from(conn, request.buy_quarter)
 
-        if not quarters:
+        if not all_quarters:
             raise HTTPException(
-                status_code=400, detail=f"No quarters found after {request.buy_quarter}"
+                status_code=400, detail=f"No quarters found from {request.buy_quarter}"
             )
 
-        # 2. Calculate returns for each stock
+        # 2. Determine sell quarter based on holding period
+        # 4Q hold from Q1 means: Q1, Q2, Q3, Q4 (sell at end of Q4)
+        # So sell_quarter = buy_quarter + (holding_period - 1)
+        if request.holding_period is not None and request.holding_period > 0:
+            sell_quarter = _add_quarters(request.buy_quarter, request.holding_period - 1)
+            # Filter quarters to only include up to sell_quarter
+            quarters = [q for q in all_quarters if q <= sell_quarter]
+            if not quarters:
+                # If sell_quarter is in the future, use all available quarters
+                quarters = all_quarters
+                sell_quarter = quarters[-1]
+        else:
+            quarters = all_quarters
+            sell_quarter = quarters[-1]
+
+        # 3. Calculate returns for each stock
         stock_returns = []
         for symbol in request.symbols:
             returns = _calculate_stock_returns(conn, symbol, request.buy_quarter, quarters)
@@ -322,16 +322,22 @@ async def simulate_buy(request: BacktestRequest) -> BacktestResult:
                 detail="Could not calculate returns for any of the provided symbols",
             )
 
-        # 3. Calculate portfolio returns (equal-weighted)
+        # 4. Calculate portfolio returns (equal-weighted)
         portfolio_returns = _calculate_portfolio_returns(stock_returns)
 
-        # 4. Get benchmark returns (S&P 500)
+        # 5. Get benchmark returns (S&P 500) from database
         if request.benchmark_return is not None:
             benchmark_returns = _create_manual_benchmark(request.benchmark_return, quarters)
         else:
-            benchmark_returns = await _fetch_sp500_returns(request.buy_quarter, quarters)
+            benchmark_returns = _get_sp500_returns_from_db(conn, request.buy_quarter, quarters)
+            if not benchmark_returns:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"No SPY benchmark data available for {request.buy_quarter}. "
+                    "Run quarterly_update.py to sync SPY prices.",
+                )
 
-        # 5. Split winners/losers
+        # 6. Split winners/losers
         winners = [s for s in stock_returns if s.total_return > 0]
         losers = [s for s in stock_returns if s.total_return <= 0]
 
@@ -345,8 +351,9 @@ async def simulate_buy(request: BacktestRequest) -> BacktestResult:
 
         return BacktestResult(
             buy_quarter=request.buy_quarter,
-            latest_quarter=quarters[-1] if quarters else request.buy_quarter,
+            sell_quarter=sell_quarter,
             quarters_held=len(quarters),
+            holding_period=request.holding_period,
             stocks=stock_returns,
             winners=winners,
             losers=losers,

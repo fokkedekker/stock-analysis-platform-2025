@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -18,6 +19,81 @@ from src.scrapers.fmp_client import FMPClient
 from src.scrapers.ticker_fetcher import TickerFetcher
 from src.scrapers.data_fetcher import DataFetcher, CheckpointManager
 from src.scrapers.macro_fetcher import MacroFetcher
+
+
+def sync_spy_prices(console: Console) -> int:
+    """Sync SPY quarterly prices using yfinance.
+
+    Returns number of quarters added.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        console.print("[yellow]yfinance not installed, skipping SPY sync[/yellow]")
+        return 0
+
+    db = get_db_manager()
+
+    # Determine date range needed
+    now = datetime.now(timezone.utc)
+    start_year = 2010
+    end_year = now.year
+
+    # Generate all quarters we might need
+    all_quarters = []
+    for year in range(start_year, end_year + 1):
+        for q in range(1, 5):
+            quarter_str = f"{year}Q{q}"
+            all_quarters.append(quarter_str)
+
+    # Check which quarters we already have
+    with db.get_connection() as conn:
+        existing = conn.execute("SELECT quarter FROM spy_prices").fetchall()
+        existing_quarters = {row[0] for row in existing}
+
+    missing_quarters = [q for q in all_quarters if q not in existing_quarters]
+
+    if not missing_quarters:
+        return 0
+
+    # Fetch SPY data from yfinance
+    spy = yf.Ticker('SPY')
+    hist = spy.history(start=f'{start_year}-01-01', end=f'{end_year + 1}-01-01')
+
+    if hist.empty:
+        console.print("[yellow]Could not fetch SPY data from yfinance[/yellow]")
+        return 0
+
+    # Map quarters to end dates
+    quarter_end_map = {
+        1: ('03', '31'), 2: ('06', '30'), 3: ('09', '30'), 4: ('12', '31')
+    }
+
+    # Get prices for missing quarters
+    new_prices = {}
+    for quarter in missing_quarters:
+        year = int(quarter[:4])
+        q = int(quarter[5])
+        month, day = quarter_end_map[q]
+        date_str = f"{year}-{month}-{day}"
+
+        # Find closest date on or before quarter end
+        mask = hist.index <= date_str
+        if mask.any():
+            closest = hist.index[mask][-1]
+            price = float(hist.loc[closest, 'Close'])
+            new_prices[quarter] = round(price, 2)
+
+    # Insert new prices
+    if new_prices:
+        with db.get_connection() as conn:
+            for quarter, price in new_prices.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO spy_prices (quarter, price, fetched_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                    (quarter, price)
+                )
+
+    return len(new_prices)
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -66,12 +142,20 @@ async def main():
     console.print()
 
     async with FMPClient() as client:
-        # Step 0: Update treasury rates for rate regime
-        console.print("[yellow]Step 0: Updating treasury rates...[/yellow]")
+        # Step 0a: Update treasury rates for rate regime
+        console.print("[yellow]Step 0a: Updating treasury rates...[/yellow]")
         macro_fetcher = MacroFetcher(client)
         macro_stats = await macro_fetcher.fetch_all_macro_data()
         quarters_with_regimes = macro_fetcher.compute_regime_flags()
         console.print(f"[green]Treasury rates: {macro_stats['treasury_rates']} quarters, rate regimes: {quarters_with_regimes}[/green]")
+
+        # Step 0b: Sync SPY benchmark prices
+        console.print("[yellow]Step 0b: Syncing SPY benchmark prices...[/yellow]")
+        spy_added = sync_spy_prices(console)
+        if spy_added > 0:
+            console.print(f"[green]Added {spy_added} SPY quarterly prices[/green]")
+        else:
+            console.print("[green]SPY prices up to date[/green]")
         console.print()
 
         # Step 1: Update ticker list

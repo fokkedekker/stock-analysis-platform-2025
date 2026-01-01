@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import {
   RiPlayLine,
   RiStopLine,
-  RiSaveLine,
   RiHistoryLine,
   RiArrowRightLine,
   RiLineChartLine,
@@ -31,7 +30,6 @@ import {
   type RunSummary,
   type ProgressUpdate,
   type CoefficientResult,
-  type ICHistoryPoint,
 } from "@/lib/elastic-net-api";
 import { getAvailableQuarters } from "@/lib/factor-discovery-api";
 
@@ -51,6 +49,7 @@ export default function ElasticNetPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [availableFeatures, setAvailableFeatures] = useState<string[]>([]);
   const [selectedFeatures, setSelectedFeatures] = useState<Set<string>>(new Set());
+  const [targetType, setTargetType] = useState<string>("raw");
 
   // Running state
   const [runId, setRunId] = useState<string | null>(null);
@@ -172,6 +171,7 @@ export default function ElasticNetPage() {
           : Array.from(selectedFeatures),
         cv_folds: cvFolds,
         winsorize_percentile: winsorizePercentile,
+        target_type: targetType,
       };
 
       const response = await startElasticNet(request);
@@ -660,6 +660,45 @@ export default function ElasticNetPage() {
         </p>
       </div>
 
+      {/* Target Type */}
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6 mb-6">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
+          Target Variable
+          <InfoTooltip content="What return metric to predict. Adjusted targets remove systematic factors to isolate stock-specific alpha, improving signal quality." />
+        </h2>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { value: "raw", label: "Raw Excess", desc: "Stock − SPY" },
+            { value: "beta_adjusted", label: "Beta-Adjusted", desc: "Stock − (β × SPY)" },
+            { value: "sector_adjusted", label: "Sector-Adjusted", desc: "Stock − Sector Avg" },
+            { value: "full_adjusted", label: "Full Adjusted", desc: "Beta + Sector" },
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setTargetType(opt.value)}
+              className={`p-3 rounded-lg text-left transition-colors ${
+                targetType === opt.value
+                  ? "bg-indigo-600 text-white"
+                  : "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
+              }`}
+            >
+              <div className="font-medium">{opt.label}</div>
+              <div className={`text-xs mt-1 ${targetType === opt.value ? "text-indigo-200" : "text-gray-500 dark:text-gray-400"}`}>
+                {opt.desc}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-3">
+          {targetType === "raw" && "Basic excess return over SPY. Simple but includes systematic risk."}
+          {targetType === "beta_adjusted" && "Removes market beta exposure. Isolates stock-specific returns."}
+          {targetType === "sector_adjusted" && "Removes sector performance. Focuses on within-sector outperformance."}
+          {targetType === "full_adjusted" && "Removes both market beta and sector effects. Most refined alpha signal."}
+        </p>
+      </div>
+
       {/* Train/Test Split */}
       <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-6 mb-6">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">
@@ -814,7 +853,7 @@ export default function ElasticNetPage() {
               Ready to train
             </div>
             <div className="text-lg font-medium text-gray-900 dark:text-gray-100">
-              {selectedQuarters.size} quarters, {selectedFeatures.size} features, {holdingPeriod}Q hold
+              {selectedQuarters.size} quarters, {selectedFeatures.size} features, {holdingPeriod}Q hold, {targetType.replace(/_/g, " ")}
             </div>
           </div>
 

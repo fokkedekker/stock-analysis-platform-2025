@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useMemo, useState, useCallback } from "react";
 import {
   LineChart,
   Line,
@@ -56,6 +56,20 @@ export default function StockPriceChart({
     }));
   }, [prices]);
 
+  // Get date range from price data for filtering signals
+  const dateRange = useMemo(() => {
+    if (prices.length === 0) return { min: null, max: null };
+    const dates = prices.map((p) => new Date(p.date).getTime());
+    return { min: Math.min(...dates), max: Math.max(...dates) };
+  }, [prices]);
+
+  // Helper to check if a date is within the chart range
+  const isDateInRange = (dateStr: string) => {
+    if (!dateRange.min || !dateRange.max) return false;
+    const d = new Date(dateStr).getTime();
+    return d >= dateRange.min && d <= dateRange.max;
+  };
+
   // Helper to find closest price data point to a target date
   const findClosestPriceData = (
     pricesData: HistoricalPrice[],
@@ -81,39 +95,80 @@ export default function StockPriceChart({
     };
   };
 
-  // Create markers for buy/sell signals
-  // Use the actual date from price data (not quarter-end date) for proper chart positioning
+  // Signals where BOTH buy and sell are in range (for complete trades with shading)
+  const completeVisibleSignals = useMemo(() => {
+    return signals.filter(
+      (s) => s.matched && isDateInRange(s.buy_date) && isDateInRange(s.sell_date)
+    );
+  }, [signals, dateRange]);
+
+  // Create buy markers for ALL matched signals where buy_date is in range
+  // This shows all buy signals visible on the chart
   const buyMarkers = useMemo(() => {
     return signals
-      .filter((s) => s.matched)
+      .filter((s) => s.matched && isDateInRange(s.buy_date))
       .map((s) => {
         const priceData = findClosestPriceData(prices, s.buy_date);
         if (!priceData) return null;
         return {
-          date: priceData.date, // Use actual trading date from price data
+          date: priceData.date,
           price: priceData.price,
           quarter: s.buy_quarter,
           type: "buy" as const,
         };
       })
       .filter((m): m is NonNullable<typeof m> => m !== null);
-  }, [signals, prices]);
+  }, [signals, prices, dateRange]);
 
+  // Create sell markers for ALL matched signals where sell_date is in range
   const sellMarkers = useMemo(() => {
     return signals
-      .filter((s) => s.matched && s.sell_price !== null)
+      .filter((s) => s.matched && s.sell_price !== null && isDateInRange(s.sell_date))
       .map((s) => {
         const priceData = findClosestPriceData(prices, s.sell_date);
         if (!priceData) return null;
         return {
-          date: priceData.date, // Use actual trading date from price data
+          date: priceData.date,
           price: priceData.price,
           quarter: s.sell_quarter,
           type: "sell" as const,
         };
       })
       .filter((m): m is NonNullable<typeof m> => m !== null);
-  }, [signals, prices]);
+  }, [signals, prices, dateRange]);
+
+  // Drag selection state for return calculation
+  const [dragStart, setDragStart] = useState<{ date: string; price: number } | null>(null);
+  const [dragEnd, setDragEnd] = useState<{ date: string; price: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Calculate return between drag points
+  const dragReturn = useMemo(() => {
+    if (!dragStart || !dragEnd) return null;
+    const returnPct = ((dragEnd.price - dragStart.price) / dragStart.price) * 100;
+    return returnPct;
+  }, [dragStart, dragEnd]);
+
+  // Handle mouse events for drag selection
+  const handleMouseDown = useCallback((e: any) => {
+    if (e && e.activePayload && e.activePayload.length > 0) {
+      const payload = e.activePayload[0].payload;
+      setDragStart({ date: payload.date, price: payload.price });
+      setDragEnd({ date: payload.date, price: payload.price });
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleMouseMove = useCallback((e: any) => {
+    if (isDragging && e && e.activePayload && e.activePayload.length > 0) {
+      const payload = e.activePayload[0].payload;
+      setDragEnd({ date: payload.date, price: payload.price });
+    }
+  }, [isDragging]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+  }, []);
 
   // Custom tooltip
   const CustomTooltip = ({ active, payload }: any) => {
@@ -166,11 +221,36 @@ export default function StockPriceChart({
   }
 
   return (
-    <div className="w-full">
+    <div className="w-full relative">
+      {/* Drag selection return display */}
+      {dragStart && dragEnd && dragReturn !== null && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 bg-white dark:bg-gray-800 border border-purple-300 dark:border-purple-600 rounded-lg shadow-lg px-4 py-2 flex items-center gap-3">
+          <div className="text-sm text-gray-600 dark:text-gray-400">
+            {formatDate(dragStart.date)} → {formatDate(dragEnd.date)}
+          </div>
+          <div className={`text-lg font-semibold ${dragReturn >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+            {dragReturn >= 0 ? '+' : ''}{dragReturn.toFixed(2)}%
+          </div>
+          <div className="text-xs text-gray-500 dark:text-gray-400">
+            {formatPrice(dragStart.price)} → {formatPrice(dragEnd.price)}
+          </div>
+          <button
+            onClick={() => { setDragStart(null); setDragEnd(null); }}
+            className="ml-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            title="Clear selection"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <ResponsiveContainer width="100%" height={320}>
         <LineChart
           data={chartData}
           margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
         >
           <CartesianGrid
             strokeDasharray="3 3"
@@ -202,26 +282,34 @@ export default function StockPriceChart({
           />
           <Tooltip content={<CustomTooltip />} />
 
-          {/* Shaded areas for holding periods */}
-          {signals
-            .filter((s) => s.matched)
-            .map((s, i) => {
-              const buyData = findClosestPriceData(prices, s.buy_date);
-              const sellData = findClosestPriceData(prices, s.sell_date);
-              if (!buyData) return null;
-              // For sell, use the last date in prices if sell_date is in the future
-              const sellDate = sellData?.date || prices[prices.length - 1]?.date;
-              if (!sellDate) return null;
-              return (
-                <ReferenceArea
-                  key={`area-${i}`}
-                  x1={buyData.date}
-                  x2={sellDate}
-                  fill={s.alpha && s.alpha > 0 ? "#22c55e" : "#ef4444"}
-                  fillOpacity={0.1}
-                />
-              );
-            })}
+          {/* Shaded areas for holding periods (only for complete trades) */}
+          {completeVisibleSignals.map((s, i) => {
+            const buyData = findClosestPriceData(prices, s.buy_date);
+            const sellData = findClosestPriceData(prices, s.sell_date);
+            if (!buyData || !sellData) return null;
+            return (
+              <ReferenceArea
+                key={`area-${i}`}
+                x1={buyData.date}
+                x2={sellData.date}
+                fill={s.alpha && s.alpha > 0 ? "#22c55e" : "#ef4444"}
+                fillOpacity={0.1}
+              />
+            );
+          })}
+
+          {/* Drag selection area for return calculation */}
+          {dragStart && dragEnd && (
+            <ReferenceArea
+              x1={dragStart.date}
+              x2={dragEnd.date}
+              fill="#8b5cf6"
+              fillOpacity={0.2}
+              stroke="#8b5cf6"
+              strokeWidth={1}
+              strokeDasharray="4 4"
+            />
+          )}
 
           {/* Price line */}
           <Line
@@ -262,7 +350,7 @@ export default function StockPriceChart({
       </ResponsiveContainer>
 
       {/* Legend */}
-      {signals.length > 0 && (
+      {(buyMarkers.length > 0 || sellMarkers.length > 0) && (
         <div className="flex items-center justify-center gap-6 mt-2">
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 rounded-full bg-green-500"></div>

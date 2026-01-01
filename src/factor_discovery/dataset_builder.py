@@ -166,6 +166,7 @@ class DatasetBuilder:
         holding_periods: list[int],
         exclusions: dict | None = None,
         data_lag_quarters: int = 1,
+        target_type: str = "raw",
     ):
         """
         Initialize builder.
@@ -183,11 +184,17 @@ class DatasetBuilder:
             data_lag_quarters: Quarters to lag analysis data (1 = use Q1 data for Q2 decisions).
                               This prevents look-ahead bias since earnings aren't released
                               until after the quarter ends. Default is 1 (conservative).
+            target_type: How to calculate alpha target variable:
+                - "raw": stock_return - spy_return (default, backward compatible)
+                - "beta_adjusted": stock_return - (beta * spy_return)
+                - "sector_adjusted": stock_return - sector_avg_return
+                - "full_adjusted": stock_return - (beta * spy_return) - sector_excess
         """
         self.quarters = quarters
         self.holding_periods = holding_periods
         self.exclusions = exclusions or {}
         self.data_lag_quarters = data_lag_quarters
+        self.target_type = target_type
 
     def build(self) -> dict:
         """
@@ -229,6 +236,12 @@ class DatasetBuilder:
             # 3. Load SPY prices
             spy_prices = self._load_spy_prices(conn)
             logger.info(f"Loaded {len(spy_prices)} SPY prices")
+
+            # 3b. Load sector returns (for sector-adjusted alpha)
+            sector_returns = {}
+            if self.target_type in ("sector_adjusted", "full_adjusted"):
+                sector_returns = self._load_sector_returns(conn)
+                logger.info(f"Loaded {len(sector_returns)} sector returns (target_type={self.target_type})")
 
             # 4. Load stock prices for all quarters
             price_data = self._load_prices(conn, available_quarters)
@@ -278,7 +291,14 @@ class DatasetBuilder:
                             continue
 
                         stock_return = ((sell_price - buy_price) / buy_price) * 100
-                        alpha = stock_return - spy_return
+
+                        # Get beta and sector for adjusted alpha calculation
+                        beta = data.get("beta")
+                        sector = data.get("sector")
+                        sector_return = sector_returns.get((sector, quarter, hp)) if sector else None
+
+                        # Calculate alpha based on target_type
+                        alpha = self._calculate_alpha(stock_return, spy_return, beta, sector_return)
 
                         # Filter extreme returns (likely data errors from stock splits, etc.)
                         # Cap at +300% and -90% per holding period to avoid corrupted data
@@ -355,6 +375,75 @@ class DatasetBuilder:
             logger.warning(f"Could not load SPY prices: {e}")
 
         return spy_prices
+
+    def _load_sector_returns(self, conn) -> dict[tuple[str, str, int], float]:
+        """
+        Load sector average returns from database.
+
+        Returns:
+            Dict with key (sector, quarter, holding_period) -> avg_return
+        """
+        sector_returns = {}
+        try:
+            result = conn.execute(
+                """
+                SELECT sector, quarter, holding_period, avg_return
+                FROM sector_returns
+                ORDER BY sector, quarter, holding_period
+                """
+            ).fetchall()
+
+            for sector, quarter, hp, avg_return in result:
+                sector_returns[(sector, quarter, hp)] = _to_float(avg_return) or 0.0
+
+        except Exception as e:
+            logger.warning(f"Could not load sector returns: {e}")
+
+        return sector_returns
+
+    def _calculate_alpha(
+        self,
+        stock_return: float,
+        spy_return: float,
+        beta: float | None,
+        sector_return: float | None,
+    ) -> float:
+        """
+        Calculate alpha based on target_type configuration.
+
+        Args:
+            stock_return: Stock return in %
+            spy_return: SPY return in %
+            beta: Stock beta (default 1.0 if None)
+            sector_return: Sector average return in %
+        """
+        if beta is None:
+            beta = 1.0
+        if sector_return is None:
+            sector_return = spy_return  # Fall back to market return
+
+        if self.target_type == "raw":
+            # Original: simple excess return
+            return stock_return - spy_return
+
+        elif self.target_type == "beta_adjusted":
+            # Remove market component based on beta
+            return stock_return - (beta * spy_return)
+
+        elif self.target_type == "sector_adjusted":
+            # Remove sector average return
+            return stock_return - sector_return
+
+        elif self.target_type == "full_adjusted":
+            # Remove both beta-adjusted market and sector excess
+            market_component = beta * spy_return
+            sector_excess = sector_return - spy_return
+            return stock_return - market_component - sector_excess
+
+        else:
+            # Unknown type, fall back to raw
+            logger.warning(f"Unknown target_type '{self.target_type}', using 'raw'")
+            return stock_return - spy_return
 
     def _load_prices(self, conn, quarters: list[str]) -> dict[str, dict[str, float]]:
         """Load all stock prices for given quarters."""
@@ -461,8 +550,9 @@ class DatasetBuilder:
                 ff.book_to_market_percentile,
                 ff.profitability_percentile,
 
-                -- PE from company_profiles (calculated from price/TTM EPS)
+                -- PE and beta from company_profiles
                 cp.pe_ratio,
+                cp.beta,
                 -- Key Metrics (raw financial ratios)
                 COALESCE(km.pb_ratio, cp.pb_ratio) as pb_ratio,
                 km.price_to_sales,
@@ -575,8 +665,10 @@ class DatasetBuilder:
                 "eps_growth_1yr",
                 "eps_growth_3yr",
                 "eps_growth_5yr",
-                # Key metrics - valuation
+                # Company profile
                 "pe_ratio",
+                "beta",
+                # Key metrics - valuation
                 "pb_ratio",
                 "price_to_sales",
                 "price_to_free_cash_flow",

@@ -526,6 +526,20 @@ CREATE TABLE IF NOT EXISTS spy_prices (
 )
 """
 
+# Sector average returns table (for sector-adjusted alpha calculation)
+SECTOR_RETURNS_TABLE = """
+CREATE TABLE IF NOT EXISTS sector_returns (
+    sector VARCHAR NOT NULL,
+    quarter VARCHAR NOT NULL,
+    holding_period INT NOT NULL,
+    avg_return DECIMAL,
+    median_return DECIMAL,
+    stock_count INT,
+    calculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(sector, quarter, holding_period)
+)
+"""
+
 # ============================================================================
 # Macroeconomic Regime Tables
 # ============================================================================
@@ -688,6 +702,7 @@ CREATE TABLE IF NOT EXISTS ml_model_runs (
     config_json JSON NOT NULL,
     train_ic DOUBLE,
     test_ic DOUBLE,
+    train_r2 DOUBLE,
     n_train_samples INTEGER,
     n_test_samples INTEGER,
     best_alpha DOUBLE,
@@ -721,14 +736,31 @@ CREATE TABLE IF NOT EXISTS ml_model_ic_history (
 )
 """
 
-ML_MODEL_PREDICTIONS_TABLE = """
-CREATE TABLE IF NOT EXISTS ml_model_predictions (
+# GAM-specific: Partial dependence curves
+ML_MODEL_PARTIAL_DEPENDENCE_TABLE = """
+CREATE TABLE IF NOT EXISTS ml_model_partial_dependence (
     run_id VARCHAR NOT NULL,
-    symbol VARCHAR NOT NULL,
-    quarter VARCHAR NOT NULL,
-    predicted_alpha DOUBLE NOT NULL,
-    predicted_rank INTEGER,
-    PRIMARY KEY (run_id, symbol, quarter)
+    feature_name VARCHAR NOT NULL,
+    x_values JSON NOT NULL,
+    y_values JSON NOT NULL,
+    optimal_min DOUBLE,
+    optimal_max DOUBLE,
+    peak_x DOUBLE,
+    peak_y DOUBLE NOT NULL,
+    importance_rank INTEGER NOT NULL,
+    PRIMARY KEY (run_id, feature_name)
+)
+"""
+
+# LightGBM-specific: Feature importance (gain and split count)
+ML_MODEL_FEATURE_IMPORTANCE_TABLE = """
+CREATE TABLE IF NOT EXISTS ml_model_feature_importance (
+    run_id VARCHAR NOT NULL,
+    feature_name VARCHAR NOT NULL,
+    importance_gain DOUBLE NOT NULL,
+    importance_split DOUBLE NOT NULL,
+    importance_rank INTEGER NOT NULL,
+    PRIMARY KEY (run_id, feature_name)
 )
 """
 
@@ -842,6 +874,7 @@ ALL_TABLES = [
     ("stock_rankings", STOCK_RANKINGS_TABLE),
     ("fetch_log", FETCH_LOG_TABLE),
     ("spy_prices", SPY_PRICES_TABLE),
+    ("sector_returns", SECTOR_RETURNS_TABLE),
     # Macro regime tables
     ("macro_indicators", MACRO_INDICATORS_TABLE),
     ("regime_flags", REGIME_FLAGS_TABLE),
@@ -855,7 +888,8 @@ ALL_TABLES = [
     ("ml_model_runs", ML_MODEL_RUNS_TABLE),
     ("ml_model_coefficients", ML_MODEL_COEFFICIENTS_TABLE),
     ("ml_model_ic_history", ML_MODEL_IC_HISTORY_TABLE),
-    ("ml_model_predictions", ML_MODEL_PREDICTIONS_TABLE),
+    ("ml_model_partial_dependence", ML_MODEL_PARTIAL_DEPENDENCE_TABLE),
+    ("ml_model_feature_importance", ML_MODEL_FEATURE_IMPORTANCE_TABLE),
     # User saved strategies
     ("saved_strategies", SAVED_STRATEGIES_TABLE),
     # Portfolio tracking

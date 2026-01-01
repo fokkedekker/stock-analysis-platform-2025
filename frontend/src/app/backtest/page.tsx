@@ -224,6 +224,8 @@ function BacktestContent() {
 
   const symbols = searchParams.get("symbols")?.split(",") || []
   const quarter = searchParams.get("quarter") || ""
+  const holdingPeriodParam = searchParams.get("holding_period")
+  const holdingPeriod = holdingPeriodParam ? parseInt(holdingPeriodParam) : undefined
 
   const runBacktest = async (benchmark?: number) => {
     if (!symbols.length || !quarter) {
@@ -238,6 +240,7 @@ function BacktestContent() {
       const data = await simulateBuy({
         symbols,
         buy_quarter: quarter,
+        holding_period: holdingPeriod,
         benchmark_return: benchmark,
       })
       setResult(data)
@@ -301,8 +304,13 @@ function BacktestContent() {
         </Link>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-50">Backtest Results</h1>
         <p className="mt-1 text-sm text-gray-500">
-          {formatQuarter(result.buy_quarter)} to {formatQuarter(result.latest_quarter)} ({result.quarters_held}{" "}
+          {formatQuarter(result.buy_quarter)} to {formatQuarter(result.sell_quarter)} ({result.quarters_held}{" "}
           quarter{result.quarters_held !== 1 ? "s" : ""})
+          {result.holding_period && (
+            <span className="ml-2 text-indigo-600 dark:text-indigo-400">
+              • {result.holding_period}Q hold
+            </span>
+          )}
         </p>
       </div>
 

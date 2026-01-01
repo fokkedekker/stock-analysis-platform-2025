@@ -527,6 +527,7 @@ export async function explainStock(
 export interface BacktestRequest {
   symbols: string[];
   buy_quarter: string;
+  holding_period?: number;  // Number of quarters to hold, undefined = hold until latest
   benchmark_return?: number;
 }
 
@@ -546,8 +547,9 @@ export interface StockReturn {
 
 export interface BacktestResult {
   buy_quarter: string;
-  latest_quarter: string;
+  sell_quarter: string;  // When sold (holding_period end or latest)
   quarters_held: number;
+  holding_period: number | null;  // Requested holding period (null = hold until latest)
   stocks: StockReturn[];
   winners: StockReturn[];
   losers: StockReturn[];
@@ -863,5 +865,188 @@ export async function checkMerge(symbols: string[]): Promise<CheckMergeResponse>
     body: JSON.stringify(symbols),
   });
   if (!res.ok) throw new Error('Failed to check merge');
+  return res.json();
+}
+
+// ============================================================================
+// ML Models
+// ============================================================================
+
+export interface MLModelSummary {
+  run_id: string;
+  model_type: string;
+  created_at: string | null;
+  status: string;
+  holding_period: number;
+  train_ic: number;
+  test_ic: number;
+  n_features_selected: number;
+}
+
+export interface MLModelStock {
+  symbol: string;
+  name: string | null;
+  sector: string | null;
+  exchange: string | null;
+  ml_score: number;  // Predicted alpha z-score from model
+  ml_rank: number;   // Rank by ml_score (1 = best)
+  features_used: number;
+
+  // Score fields
+  piotroski_score: number | null;
+  graham_score: number | null;
+  altman_z_score: number | null;
+  roic: number | null;
+  peg_ratio: number | null;
+  magic_formula_rank: number | null;
+  book_to_market_percentile: number | null;
+
+  // Valuation metrics
+  pe_ratio: number | null;
+  pb_ratio: number | null;
+  price_to_sales: number | null;
+  price_to_free_cash_flow: number | null;
+  price_to_operating_cash_flow: number | null;
+  ev_to_ebitda: number | null;
+  ev_to_sales: number | null;
+  ev_to_free_cash_flow: number | null;
+  ev_to_operating_cash_flow: number | null;
+  earnings_yield: number | null;
+
+  // Profitability metrics
+  roe: number | null;
+  roa: number | null;
+  return_on_tangible_assets: number | null;
+  gross_profit_margin: number | null;
+  operating_profit_margin: number | null;
+  net_profit_margin: number | null;
+
+  // Liquidity/Leverage
+  current_ratio: number | null;
+  quick_ratio: number | null;
+  cash_ratio: number | null;
+  debt_ratio: number | null;
+  debt_to_equity: number | null;
+  debt_to_assets: number | null;
+  net_debt_to_ebitda: number | null;
+  interest_coverage: number | null;
+
+  // Stability/Quality
+  roic_std_dev: number | null;
+  gross_margin_std_dev: number | null;
+  fcf_to_net_income: number | null;
+  reinvestment_rate: number | null;
+  fcf_yield: number | null;
+  fcf_positive_5yr: number | null;
+
+  // Growth
+  eps_growth_1yr: number | null;
+  eps_growth_3yr: number | null;
+  eps_growth_5yr: number | null;
+  eps_cagr: number | null;
+
+  // Quality tags and booleans
+  quality_tags: string | null;
+  trading_below_ncav: number | null;
+  has_durable_compounder: number | null;
+  has_cash_machine: number | null;
+  has_deep_value: number | null;
+  has_heavy_reinvestor: number | null;
+  has_premium_priced: number | null;
+  has_volatile_returns: number | null;
+  has_weak_moat_signal: number | null;
+  has_earnings_quality_concern: number | null;
+
+  // Other
+  dividend_yield: number | null;
+  payout_ratio: number | null;
+  asset_turnover: number | null;
+  inventory_turnover: number | null;
+  receivables_turnover: number | null;
+  payables_turnover: number | null;
+  profitability_percentile: number | null;
+  asset_growth_percentile: number | null;
+  rate_momentum: number | null;
+
+  // Compatibility fields for PipelineStock table display
+  altman_passed?: boolean;
+  piotroski_passed?: boolean;
+  quality_label?: string;
+  valuation_lenses_passed?: number;
+  net_net_discount?: number | null;
+}
+
+export interface ApplyModelResponse {
+  screen: string;
+  run_id: string;
+  quarter: string;
+  count: number;
+  stocks: MLModelStock[];
+  error?: string;
+}
+
+export interface MLModelSignal {
+  buy_quarter: string;
+  buy_date: string;
+  sell_quarter: string;
+  sell_date: string;
+  buy_price: number | null;
+  sell_price: number | null;
+  stock_return: number | null;
+  spy_return: number | null;
+  alpha: number | null;
+  matched: boolean;
+  predicted_alpha: number;
+  predicted_rank: number;
+}
+
+export interface MLModelSignalsResponse {
+  symbol: string;
+  run_id: string;
+  model_name: string;
+  holding_period: number;
+  signals: MLModelSignal[];
+  total_return: number | null;
+  total_alpha: number | null;
+  avg_alpha_per_trade: number | null;
+  num_trades: number;
+  win_rate: number | null;
+}
+
+export async function getAvailableMLModels(): Promise<{ models: MLModelSummary[], total: number }> {
+  const res = await fetch(`${API_BASE}/screener/ml-models`);
+  if (!res.ok) throw new Error('Failed to fetch ML models');
+  return res.json();
+}
+
+export async function applyMLModel(
+  runId: string,
+  topPercentile: number = 20,
+  quarter?: string | null,
+  limit: number = 200
+): Promise<ApplyModelResponse> {
+  const params = new URLSearchParams();
+  params.set('top_percentile', String(topPercentile));
+  if (quarter) params.set('quarter', quarter);
+  params.set('limit', String(limit));
+
+  const res = await fetch(`${API_BASE}/screener/apply-model/${runId}?${params}`);
+  if (!res.ok) throw new Error('Failed to apply ML model');
+  return res.json();
+}
+
+export async function getMLModelSignals(
+  runId: string,
+  symbol: string,
+  topPercentile: number = 20,
+  modelType: string = 'elastic_net'
+): Promise<MLModelSignalsResponse> {
+  const params = new URLSearchParams();
+  params.set('top_percentile', String(topPercentile));
+
+  // Route to correct endpoint based on model type
+  const endpoint = modelType === 'lightgbm' ? 'lightgbm' : modelType === 'gam' ? 'gam' : 'elastic-net';
+  const res = await fetch(`${API_BASE}/${endpoint}/signals/${runId}/${symbol}?${params}`);
+  if (!res.ok) throw new Error('Failed to fetch ML model signals');
   return res.json();
 }

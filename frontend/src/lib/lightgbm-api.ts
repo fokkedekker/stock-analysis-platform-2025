@@ -1,7 +1,7 @@
 /**
- * Elastic Net API Client
+ * LightGBM API Client
  *
- * Handles all API calls to the Elastic Net ML model backend.
+ * Handles all API calls to the LightGBM ML model backend.
  */
 
 const API_BASE = "http://localhost:8000/api/v1";
@@ -10,13 +10,12 @@ const API_BASE = "http://localhost:8000/api/v1";
 // Types
 // ============================================================================
 
-export interface ElasticNetRequest {
+export interface LightGBMRequest {
   quarters: string[];
   holding_period: number;
   train_end_quarter?: string | null;
   features?: string[] | null;
-  l1_ratios?: number[] | null;
-  cv_folds: number;
+  n_optuna_trials: number;
   winsorize_percentile: number;
   target_type?: string; // "raw", "beta_adjusted", "sector_adjusted", "full_adjusted"
 }
@@ -37,11 +36,10 @@ export interface ProgressUpdate {
   result_run_id?: string;
 }
 
-export interface CoefficientResult {
+export interface FeatureImportanceResult {
   feature_name: string;
-  coefficient: number;
-  coefficient_std: number;
-  stability_score: number;
+  importance_gain: number;
+  importance_split: number;
   importance_rank: number;
 }
 
@@ -58,7 +56,7 @@ export interface StockPrediction {
   predicted_rank: number;
 }
 
-export interface ElasticNetResult {
+export interface LightGBMResult {
   run_id: string;
   status: string;
   error_message: string | null;
@@ -69,14 +67,13 @@ export interface ElasticNetResult {
   n_train_samples: number;
   n_test_samples: number;
   // Model parameters
-  best_alpha: number | null;
-  best_l1_ratio: number | null;
+  best_params: Record<string, number>;
   n_features_selected: number;
   // Config
   holding_period: number;
   train_end_quarter: string | null;
   // Data
-  coefficients: CoefficientResult[];
+  feature_importances: FeatureImportanceResult[];
   ic_history: ICHistoryPoint[];
   predictions: StockPrediction[];
 }
@@ -101,12 +98,12 @@ export interface FeaturesResponse {
 // ============================================================================
 
 /**
- * Start a new Elastic Net training run.
+ * Start a new LightGBM training run.
  */
-export async function startElasticNet(
-  request: ElasticNetRequest
+export async function startLightGBM(
+  request: LightGBMRequest
 ): Promise<RunResponse> {
-  const response = await fetch(`${API_BASE}/elastic-net/run`, {
+  const response = await fetch(`${API_BASE}/lightgbm/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
@@ -114,7 +111,7 @@ export async function startElasticNet(
 
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Failed to start Elastic Net training: ${error}`);
+    throw new Error(`Failed to start LightGBM training: ${error}`);
   }
 
   return response.json();
@@ -125,14 +122,14 @@ export async function startElasticNet(
  * Returns an EventSource that emits ProgressUpdate objects.
  */
 export function getProgressStream(runId: string): EventSource {
-  return new EventSource(`${API_BASE}/elastic-net/progress/${runId}`);
+  return new EventSource(`${API_BASE}/lightgbm/progress/${runId}`);
 }
 
 /**
- * Get complete results for an Elastic Net run.
+ * Get complete results for a LightGBM run.
  */
-export async function getResults(runId: string): Promise<ElasticNetResult> {
-  const response = await fetch(`${API_BASE}/elastic-net/results/${runId}`);
+export async function getResults(runId: string): Promise<LightGBMResult> {
+  const response = await fetch(`${API_BASE}/lightgbm/results/${runId}`);
 
   if (!response.ok) {
     throw new Error(`Failed to get results: ${response.statusText}`);
@@ -142,18 +139,18 @@ export async function getResults(runId: string): Promise<ElasticNetResult> {
 }
 
 /**
- * Get coefficients for a run.
+ * Get feature importance for a run.
  */
-export async function getCoefficients(
+export async function getFeatureImportance(
   runId: string,
   limit = 50
-): Promise<CoefficientResult[]> {
+): Promise<FeatureImportanceResult[]> {
   const response = await fetch(
-    `${API_BASE}/elastic-net/coefficients/${runId}?limit=${limit}`
+    `${API_BASE}/lightgbm/feature-importance/${runId}?limit=${limit}`
   );
 
   if (!response.ok) {
-    throw new Error(`Failed to get coefficients: ${response.statusText}`);
+    throw new Error(`Failed to get feature importance: ${response.statusText}`);
   }
 
   return response.json();
@@ -163,7 +160,7 @@ export async function getCoefficients(
  * Get IC history for a run.
  */
 export async function getICHistory(runId: string): Promise<ICHistoryPoint[]> {
-  const response = await fetch(`${API_BASE}/elastic-net/ic-history/${runId}`);
+  const response = await fetch(`${API_BASE}/lightgbm/ic-history/${runId}`);
 
   if (!response.ok) {
     throw new Error(`Failed to get IC history: ${response.statusText}`);
@@ -180,7 +177,7 @@ export async function getPredictions(
   limit = 100
 ): Promise<StockPrediction[]> {
   const response = await fetch(
-    `${API_BASE}/elastic-net/predictions/${runId}?limit=${limit}`
+    `${API_BASE}/lightgbm/predictions/${runId}?limit=${limit}`
   );
 
   if (!response.ok) {
@@ -191,10 +188,10 @@ export async function getPredictions(
 }
 
 /**
- * Get list of past Elastic Net runs.
+ * Get list of past LightGBM runs.
  */
 export async function getHistory(limit = 50): Promise<RunSummary[]> {
-  const response = await fetch(`${API_BASE}/elastic-net/history?limit=${limit}`);
+  const response = await fetch(`${API_BASE}/lightgbm/history?limit=${limit}`);
 
   if (!response.ok) {
     throw new Error(`Failed to get history: ${response.statusText}`);
@@ -207,7 +204,7 @@ export async function getHistory(limit = 50): Promise<RunSummary[]> {
  * Cancel a running training.
  */
 export async function cancelRun(runId: string): Promise<{ status: string; run_id: string }> {
-  const response = await fetch(`${API_BASE}/elastic-net/cancel/${runId}`, {
+  const response = await fetch(`${API_BASE}/lightgbm/cancel/${runId}`, {
     method: "POST",
   });
 
@@ -219,10 +216,10 @@ export async function cancelRun(runId: string): Promise<{ status: string; run_id
 }
 
 /**
- * Get available features for Elastic Net.
+ * Get available features for LightGBM.
  */
 export async function getFeatures(): Promise<FeaturesResponse> {
-  const response = await fetch(`${API_BASE}/elastic-net/features`);
+  const response = await fetch(`${API_BASE}/lightgbm/features`);
 
   if (!response.ok) {
     throw new Error(`Failed to get features: ${response.statusText}`);
@@ -239,7 +236,6 @@ export async function getFeatures(): Promise<FeaturesResponse> {
  * Format a feature name for display.
  */
 export function formatFeatureName(name: string): string {
-  // Convert snake_case to Title Case
   return name
     .replace(/_/g, " ")
     .replace(/\b\w/g, (l) => l.toUpperCase());
@@ -254,19 +250,18 @@ export function formatIC(ic: number | null): string {
 }
 
 /**
- * Format coefficient for display.
+ * Format feature importance for display.
  */
-export function formatCoefficient(coef: number): string {
-  if (Math.abs(coef) < 0.0001) return "~0";
-  return coef.toFixed(4);
+export function formatImportance(importance: number): string {
+  if (importance < 0.001) return "~0";
+  return importance.toFixed(4);
 }
 
 /**
- * Get color class based on coefficient value.
+ * Get color class based on importance value.
  */
-export function getCoefficientColorClass(coef: number): string {
-  if (coef > 0) return "text-green-600 dark:text-green-400";
-  if (coef < 0) return "text-red-600 dark:text-red-400";
+export function getImportanceColorClass(importance: number): string {
+  if (importance > 0) return "text-blue-600 dark:text-blue-400";
   return "text-gray-600 dark:text-gray-400";
 }
 
@@ -282,12 +277,13 @@ export function getICColorClass(ic: number | null): string {
 }
 
 /**
- * Get stability badge color.
+ * Get importance rank badge color.
  */
-export function getStabilityColorClass(stability: number): string {
-  if (stability >= 0.8) return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-  if (stability >= 0.6) return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
-  return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+export function getImportanceRankColorClass(rank: number): string {
+  if (rank <= 5) return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+  if (rank <= 15) return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+  if (rank <= 30) return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
+  return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
 }
 
 /**
@@ -301,19 +297,29 @@ export function getStageDisplayName(stage: string): string {
     prepare: "Preparing Features",
     preprocessing: "Preprocessing Features",
     preprocess: "Preprocessing Features",
-    split: "Splitting Train/Test",
-    splitting: "Splitting Train/Test",
-    train: "Fitting Model",
-    fitting: "Fitting Model",
-    stability: "Calculating Stability",
-    evaluating: "Evaluating Performance",
+    split: "Splitting Train/Val/Test",
+    optuna: "Tuning Hyperparameters",
+    train: "Training Final Model",
+    importance: "Extracting Feature Importance",
     ic: "Calculating IC History",
-    calculating_stability: "Calculating Stability",
     predict: "Generating Predictions",
-    generating_predictions: "Generating Predictions",
     saving: "Saving Results",
     done: "Complete",
     complete: "Complete",
   };
   return stageNames[stage] || stage;
+}
+
+/**
+ * Format best params for display.
+ */
+export function formatBestParams(params: Record<string, number>): string {
+  if (!params || Object.keys(params).length === 0) return "—";
+  const items = Object.entries(params).map(([k, v]) => {
+    const formattedValue = typeof v === "number" && !Number.isInteger(v)
+      ? v.toFixed(4)
+      : v;
+    return `${formatFeatureName(k)}: ${formattedValue}`;
+  });
+  return items.join(", ");
 }

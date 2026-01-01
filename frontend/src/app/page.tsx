@@ -17,6 +17,10 @@ import {
   QUALITY_TAGS,
   formatNumber,
   formatPercent,
+  getAvailableMLModels,
+  applyMLModel,
+  MLModelSummary,
+  MLModelStock,
 } from "@/lib/api"
 import {
   loadStrategies,
@@ -246,6 +250,14 @@ export default function PipelinePage() {
   // Raw factor filters (from Factor Discovery or manual entry)
   const [rawFilters, setRawFilters] = useState<RawFactorFilter[]>([])
 
+  // ML Model filtering
+  const [availableModels, setAvailableModels] = useState<MLModelSummary[]>([])
+  const [useMLModel, setUseMLModel] = useState(false)
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
+  const [modelTopPercentile, setModelTopPercentile] = useState(20)
+  const [mlModelStocks, setMlModelStocks] = useState<MLModelStock[]>([])
+  const [mlModelLoading, setMlModelLoading] = useState(false)
+
   const fetchData = useCallback(async () => {
     try {
       setLoading(true)
@@ -317,6 +329,35 @@ export default function PipelinePage() {
   useEffect(() => {
     loadStrategies().then(setSavedStrategies).catch(console.error)
   }, [])
+
+  // Load available ML models on mount
+  useEffect(() => {
+    getAvailableMLModels()
+      .then((data) => setAvailableModels(data.models))
+      .catch(console.error)
+  }, [])
+
+  // Fetch ML model stocks when model is selected
+  useEffect(() => {
+    if (!useMLModel || !selectedModelId || !quarter) {
+      setMlModelStocks([])
+      return
+    }
+
+    async function fetchModelStocks() {
+      setMlModelLoading(true)
+      try {
+        const result = await applyMLModel(selectedModelId!, modelTopPercentile, quarter, 200)
+        setMlModelStocks(result.stocks || [])
+      } catch (err) {
+        console.error("Failed to apply ML model:", err)
+        setMlModelStocks([])
+      } finally {
+        setMlModelLoading(false)
+      }
+    }
+    fetchModelStocks()
+  }, [useMLModel, selectedModelId, modelTopPercentile, quarter])
 
   // Apply a saved strategy to all filters
   const applyStrategy = (strategy: SavedStrategy) => {
@@ -432,22 +473,49 @@ export default function PipelinePage() {
     })
   }
 
-  const selectAll = () => setSelectedStocks(new Set(stocks.map((s) => s.symbol)))
-  const selectFirstN = (n: number) => setSelectedStocks(new Set(stocks.slice(0, n).map((s) => s.symbol)))
+  // When ML model is active, use ML model stocks directly (sorted by ml_rank)
+  // This bypasses all strategy filters - ML model is the only filter
+  const filteredStocks = useMemo(() => {
+    if (!useMLModel || !selectedModelId || mlModelStocks.length === 0) {
+      return stocks
+    }
+    // Use mlModelStocks directly - they're already filtered and ranked by the model
+    // Sort by ml_rank ascending (rank 1 first)
+    const sorted = [...mlModelStocks].sort((a, b) => a.ml_rank - b.ml_rank)
+    return sorted
+  }, [stocks, useMLModel, selectedModelId, mlModelStocks])
+
+  const selectAll = () => setSelectedStocks(new Set(filteredStocks.map((s) => s.symbol)))
+  const selectFirstN = (n: number) => setSelectedStocks(new Set(filteredStocks.slice(0, n).map((s) => s.symbol)))
   const clearSelection = () => setSelectedStocks(new Set())
 
   const handleSimulateBuy = () => {
     if (!quarter || selectedStocks.size === 0) return
     const symbols = Array.from(selectedStocks).join(",")
-    router.push(`/backtest?symbols=${symbols}&quarter=${quarter}`)
+    // If using an ML model, include its holding period in the backtest
+    let url = `/backtest?symbols=${symbols}&quarter=${quarter}`
+    if (useMLModel && selectedModelId) {
+      const selectedModel = availableModels.find(m => m.run_id === selectedModelId)
+      if (selectedModel?.holding_period) {
+        url += `&holding_period=${selectedModel.holding_period}`
+      }
+    }
+    router.push(url)
+  }
+
+  // Get model score for a stock
+  const getModelScore = (symbol: string): number | null => {
+    if (!useMLModel || !selectedModelId) return null
+    const mlStock = mlModelStocks.find(s => s.symbol === symbol)
+    return mlStock?.ml_score ?? null
   }
 
   // Pagination
-  const totalPages = Math.ceil(stocks.length / ITEMS_PER_PAGE)
+  const totalPages = Math.ceil(filteredStocks.length / ITEMS_PER_PAGE)
   const paginatedStocks = useMemo(() => {
     const start = (currentPage - 1) * ITEMS_PER_PAGE
-    return stocks.slice(start, start + ITEMS_PER_PAGE)
-  }, [stocks, currentPage])
+    return filteredStocks.slice(start, start + ITEMS_PER_PAGE)
+  }, [filteredStocks, currentPage])
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
@@ -598,22 +666,129 @@ export default function PipelinePage() {
         />
       </div>
 
+      {/* Stage 4: ML Model Filter */}
+      <div className="mb-6 p-4 bg-white dark:bg-gray-950 rounded-lg border border-gray-200 dark:border-gray-800">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              id="use-ml-model"
+              checked={useMLModel}
+              onChange={(e) => {
+                const enabled = e.target.checked
+                setUseMLModel(enabled)
+                if (enabled) {
+                  // Clear all pipeline filters when ML model is enabled
+                  setRequireAltman(false)
+                  setRequirePiotroski(false)
+                  setQualityFilter(false)
+                  setMinLenses(0)
+                  setLensGraham(false)
+                  setLensNetNet(false)
+                  setLensPeg(false)
+                  setLensMagicFormula(false)
+                  setLensFamaFrenchBm(false)
+                  setRawFilters([])
+                }
+              }}
+              className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <label htmlFor="use-ml-model" className="text-sm font-medium text-gray-900 dark:text-gray-100">
+              Apply ML Model Filter
+            </label>
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              (Clears pipeline filters, shows only ML model picks)
+            </span>
+          </div>
+          {availableModels.length === 0 && (
+            <Link
+              href="/models/elastic-net"
+              className="text-sm text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
+            >
+              Train a model →
+            </Link>
+          )}
+        </div>
+
+        {useMLModel && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                Model
+              </label>
+              <select
+                value={selectedModelId || ""}
+                onChange={(e) => setSelectedModelId(e.target.value || null)}
+                className="w-full text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                disabled={availableModels.length === 0}
+              >
+                <option value="">Select a model...</option>
+                {availableModels.map((model) => (
+                  <option key={model.run_id} value={model.run_id}>
+                    {model.model_type === 'lightgbm' ? 'LightGBM' : model.model_type === 'gam' ? 'GAM' : 'Elastic Net'} - {model.created_at ? new Date(model.created_at).toLocaleDateString() : "Unknown"} -
+                    IC: {model.test_ic?.toFixed(3) || "N/A"} ({model.holding_period}Q hold)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                Top Percentile
+              </label>
+              <select
+                value={modelTopPercentile}
+                onChange={(e) => setModelTopPercentile(Number(e.target.value))}
+                className="w-full text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+              >
+                <option value={10}>Top 10%</option>
+                <option value={20}>Top 20%</option>
+                <option value={30}>Top 30%</option>
+                <option value={50}>Top 50%</option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {useMLModel && selectedModelId && (
+          <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+            {mlModelLoading ? (
+              <span>Loading model predictions...</span>
+            ) : mlModelStocks.length > 0 ? (
+              <span className="text-green-600 dark:text-green-400">
+                ✓ {mlModelStocks.length} stocks in top {modelTopPercentile}% by model score
+              </span>
+            ) : (
+              <span className="text-amber-600 dark:text-amber-400">
+                No predictions found for this quarter
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Ranking */}
       <div className="mb-6 flex items-center gap-4">
         <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Rank by:</span>
-        <select
-          value={rankBy}
-          onChange={(e) => setRankBy(e.target.value as RankMethod)}
-          className="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-        >
-          {RANK_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+        {useMLModel && selectedModelId ? (
+          <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">
+            Model Score
+          </span>
+        ) : (
+          <select
+            value={rankBy}
+            onChange={(e) => setRankBy(e.target.value as RankMethod)}
+            className="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+          >
+            {RANK_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        )}
         <span className="text-sm text-gray-500">
-          Showing {stocks.length} stocks
+          Showing {filteredStocks.length} stocks{useMLModel && selectedModelId && ` (ML filtered)`}
         </span>
         {quarter && stocks.length > 0 && (
           <div className="flex items-center gap-2 ml-4">
@@ -703,7 +878,9 @@ export default function PipelinePage() {
                   Valuation Lenses
                 </th>
                 <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {RANK_OPTIONS.find((r) => r.value === rankBy)?.label || "Rank"}
+                  {useMLModel && selectedModelId
+                    ? "Model Score"
+                    : RANK_OPTIONS.find((r) => r.value === rankBy)?.label || "Rank"}
                 </th>
               </tr>
             </thead>
@@ -739,35 +916,54 @@ export default function PipelinePage() {
                   </td>
                   <td className="px-3 py-3 text-center">
                     <SurvivalBadges
-                      altmanPassed={stock.altman_passed}
+                      altmanPassed={(stock as any).altman_passed ?? false}
                       altmanZScore={stock.altman_z_score}
-                      piotroskiPassed={stock.piotroski_passed}
+                      piotroskiPassed={(stock as any).piotroski_passed ?? false}
                       piotroskiScore={stock.piotroski_score}
                     />
                   </td>
                   <td className="px-3 py-3 text-center">
-                    <QualityBadge label={stock.quality_label} roic={stock.roic} />
+                    <QualityBadge label={(stock as any).quality_label ?? 'Unknown'} roic={stock.roic} />
                   </td>
                   <td className="px-3 py-3">
                     <QualityTagsChips tags={stock.quality_tags} />
                   </td>
                   <td className="px-3 py-3">
-                    <ValuationChips lenses={stock.valuation_lenses_passed} />
+                    <ValuationChips lenses={(stock as any).valuation_lenses_passed ?? []} />
                   </td>
-                  <td className="px-3 py-3 text-right text-sm text-gray-900 dark:text-gray-100">
-                    {rankBy === "magic-formula" && stock.magic_formula_rank != null
-                      ? `#${stock.magic_formula_rank}`
-                      : rankBy === "earnings-yield" && stock.earnings_yield != null
-                      ? formatPercent(stock.earnings_yield)
-                      : rankBy === "roic" && stock.roic != null
-                      ? formatPercent(stock.roic)
-                      : rankBy === "peg" && stock.peg_ratio != null
-                      ? formatNumber(stock.peg_ratio, 2)
-                      : rankBy === "graham-score" && stock.graham_score != null
-                      ? `${stock.graham_score}/8`
-                      : rankBy === "net-net-discount" && stock.net_net_discount != null
-                      ? formatPercent(stock.net_net_discount)
-                      : "—"}
+                  <td className="px-3 py-3 text-right text-sm font-mono">
+                    {useMLModel && selectedModelId ? (
+                      (() => {
+                        const score = getModelScore(stock.symbol)
+                        if (score === null) return "—"
+                        const colorClass = score > 0
+                          ? "text-green-600 dark:text-green-400"
+                          : score < 0
+                          ? "text-red-600 dark:text-red-400"
+                          : "text-gray-500"
+                        return (
+                          <span className={colorClass}>
+                            {score > 0 ? "+" : ""}{score.toFixed(2)}
+                          </span>
+                        )
+                      })()
+                    ) : (
+                      <span className="text-gray-900 dark:text-gray-100">
+                        {rankBy === "magic-formula" && stock.magic_formula_rank != null
+                          ? `#${stock.magic_formula_rank}`
+                          : rankBy === "earnings-yield" && stock.earnings_yield != null
+                          ? formatPercent(stock.earnings_yield)
+                          : rankBy === "roic" && stock.roic != null
+                          ? formatPercent(stock.roic)
+                          : rankBy === "peg" && stock.peg_ratio != null
+                          ? formatNumber(stock.peg_ratio, 2)
+                          : rankBy === "graham-score" && stock.graham_score != null
+                          ? `${stock.graham_score}/8`
+                          : rankBy === "net-net-discount" && stock.net_net_discount != null
+                          ? formatPercent(stock.net_net_discount)
+                          : "—"}
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}

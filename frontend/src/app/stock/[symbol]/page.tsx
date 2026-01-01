@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import {
@@ -12,12 +12,16 @@ import {
   getDividends,
   getHistoricalPrices,
   getStrategySignals,
+  getAvailableMLModels,
+  getMLModelSignals,
   formatNumber,
   formatCurrency,
   StockAnalysis,
   StockProfile,
   HistoricalPrice,
   StrategySignalsResponse,
+  MLModelSummary,
+  MLModelSignalsResponse,
 } from "@/lib/api"
 import { loadStrategies, SavedStrategy } from "@/lib/saved-strategies"
 import StockPriceChart from "@/components/StockPriceChart"
@@ -106,6 +110,12 @@ export default function StockDetailPage() {
   const [strategySignals, setStrategySignals] = useState<StrategySignalsResponse | null>(null)
   const [chartLoading, setChartLoading] = useState(false)
 
+  // ML Model chart state
+  const [mlModels, setMlModels] = useState<MLModelSummary[]>([])
+  const [selectedMLModelId, setSelectedMLModelId] = useState<string>("")
+  const [mlModelSignals, setMlModelSignals] = useState<MLModelSignalsResponse | null>(null)
+  const [mlModelLoading, setMlModelLoading] = useState(false)
+
   useEffect(() => {
     async function fetchData() {
       try {
@@ -135,13 +145,17 @@ export default function StockDetailPage() {
     fetchData()
   }, [symbol])
 
-  // Load saved strategies and historical prices
+  // Load saved strategies, ML models, and historical prices
   useEffect(() => {
     async function loadChartData() {
       try {
-        // Load strategies
-        const savedStrategies = await loadStrategies()
+        // Load strategies and ML models in parallel
+        const [savedStrategies, mlModelsResult] = await Promise.all([
+          loadStrategies(),
+          getAvailableMLModels().catch(() => ({ models: [], total: 0 })),
+        ])
         setStrategies(savedStrategies)
+        setMlModels(mlModelsResult.models)
 
         // Load historical prices (5 years)
         const fiveYearsAgo = new Date()
@@ -180,6 +194,106 @@ export default function StockDetailPage() {
     }
     loadSignals()
   }, [selectedStrategyId, symbol])
+
+  // Load ML model signals when a model is selected
+  useEffect(() => {
+    async function loadMLSignals() {
+      if (!selectedMLModelId) {
+        setMlModelSignals(null)
+        return
+      }
+
+      // Find the selected model to get its type
+      const selectedModel = mlModels.find(m => m.run_id === selectedMLModelId)
+      const modelType = selectedModel?.model_type || 'elastic_net'
+
+      setMlModelLoading(true)
+      try {
+        const signals = await getMLModelSignals(selectedMLModelId, symbol, 20, modelType)
+        setMlModelSignals(signals)
+      } catch (err) {
+        console.error("Failed to load ML model signals:", err)
+        setMlModelSignals(null)
+      } finally {
+        setMlModelLoading(false)
+      }
+    }
+    loadMLSignals()
+  }, [selectedMLModelId, symbol, mlModels])
+
+  // Calculate visible signal stats (matching what's shown on chart)
+  const visibleMLStats = useMemo(() => {
+    if (!mlModelSignals || !historicalPrices.length) {
+      return null
+    }
+
+    // Get price date range
+    const dates = historicalPrices.map(p => new Date(p.date).getTime())
+    const minDate = Math.min(...dates)
+    const maxDate = Math.max(...dates)
+
+    // Helper to check if date is in range
+    const isInRange = (dateStr: string) => {
+      const d = new Date(dateStr).getTime()
+      return d >= minDate && d <= maxDate
+    }
+
+    // Count signals where buy_date is in range (these have visible buy markers)
+    const visibleBuySignals = mlModelSignals.signals.filter(
+      s => s.matched && isInRange(s.buy_date)
+    )
+    const numVisibleBuys = visibleBuySignals.length
+
+    // For stats, we need complete trades (both buy and sell prices available)
+    const completeTrades = visibleBuySignals.filter(
+      s => s.stock_return !== null && isInRange(s.sell_date)
+    )
+
+    if (completeTrades.length === 0) {
+      return {
+        numTrades: numVisibleBuys,
+        totalNumTrades: mlModelSignals.num_trades,
+        totalReturn: null,
+        totalAlpha: null,
+        avgAlpha: null,
+        winRate: null,
+      }
+    }
+
+    const validTrades = completeTrades
+
+    // Calculate compound stock return
+    let stockCompound = 1.0
+    let spyCompound = 1.0
+    for (const s of validTrades) {
+      stockCompound *= (1 + (s.stock_return || 0) / 100)
+      if (s.spy_return !== null) {
+        spyCompound *= (1 + s.spy_return / 100)
+      }
+    }
+
+    const totalReturn = (stockCompound - 1) * 100
+    const totalSpyReturn = (spyCompound - 1) * 100
+    const totalAlpha = totalReturn - totalSpyReturn
+
+    // Avg alpha and win rate
+    const alphas = validTrades
+      .map(s => s.alpha)
+      .filter((a): a is number => a !== null)
+    const avgAlpha = alphas.length > 0 ? alphas.reduce((a, b) => a + b, 0) / alphas.length : null
+    const winRate = alphas.length > 0
+      ? (alphas.filter(a => a > 0).length / alphas.length) * 100
+      : null
+
+    return {
+      numTrades: numVisibleBuys,
+      totalNumTrades: mlModelSignals.num_trades,
+      totalReturn: Math.round(totalReturn * 10) / 10,
+      totalAlpha: Math.round(totalAlpha * 10) / 10,
+      avgAlpha: avgAlpha !== null ? Math.round(avgAlpha * 100) / 100 : null,
+      winRate: winRate !== null ? Math.round(winRate) : null,
+    }
+  }, [mlModelSignals, historicalPrices])
 
   if (loading) {
     return (
@@ -270,26 +384,47 @@ export default function StockDetailPage() {
       {/* Stock Price Chart with Strategy Signals */}
       {historicalPrices.length > 0 && (
         <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-4">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-50">
               Price History
             </h2>
-            <div className="flex items-center gap-4">
-              <label className="text-sm text-gray-600 dark:text-gray-400">
-                Apply Strategy:
-              </label>
-              <select
-                value={selectedStrategyId}
-                onChange={(e) => setSelectedStrategyId(e.target.value)}
-                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-              >
-                <option value="">No strategy selected</option>
-                {strategies.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.holding_period || 1}Q hold)
-                  </option>
-                ))}
-              </select>
+            <div className="flex items-center gap-6 flex-wrap">
+              {/* Strategy Selector */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600 dark:text-gray-400">
+                  Strategy:
+                </label>
+                <select
+                  value={selectedStrategyId}
+                  onChange={(e) => setSelectedStrategyId(e.target.value)}
+                  className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                >
+                  <option value="">None</option>
+                  {strategies.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.holding_period || 1}Q hold)
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {/* ML Model Selector */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600 dark:text-gray-400">
+                  ML Model:
+                </label>
+                <select
+                  value={selectedMLModelId}
+                  onChange={(e) => setSelectedMLModelId(e.target.value)}
+                  className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                >
+                  <option value="">None</option>
+                  {mlModels.map((m) => (
+                    <option key={m.run_id} value={m.run_id}>
+                      {m.model_type === 'lightgbm' ? 'LightGBM' : m.model_type === 'gam' ? 'GAM' : 'Elastic Net'} {m.created_at ? new Date(m.created_at).toLocaleDateString() : ""} (IC: {m.test_ic?.toFixed(3) || "N/A"})
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
 
@@ -298,85 +433,177 @@ export default function StockDetailPage() {
             <div className="lg:col-span-3 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4">
               <StockPriceChart
                 prices={historicalPrices}
-                signals={strategySignals?.signals || []}
-                loading={chartLoading}
+                signals={[
+                  ...(strategySignals?.signals || []),
+                  ...(mlModelSignals?.signals || []),
+                ]}
+                loading={chartLoading || mlModelLoading}
               />
             </div>
 
-            {/* Strategy Performance Summary */}
-            <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4">
-              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-4">
-                Strategy Performance
-              </h3>
-              {strategySignals ? (
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Strategy</p>
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                      {strategySignals.strategy_name}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Holding Period</p>
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                      {strategySignals.holding_period} quarter{strategySignals.holding_period !== 1 ? "s" : ""}
-                    </p>
-                  </div>
-                  <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
-                    <p className="text-xs text-gray-500 dark:text-gray-400">Number of Trades</p>
-                    <p className="text-lg font-bold text-gray-900 dark:text-gray-100">
-                      {strategySignals.num_trades}
-                    </p>
-                  </div>
-                  {strategySignals.total_return !== null && (
+            {/* Performance Summary */}
+            <div className="space-y-4">
+              {/* Strategy Performance Summary */}
+              {strategySignals && (
+                <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                    Strategy Performance
+                  </h3>
+                  <div className="space-y-3">
                     <div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Total Return</p>
-                      <p className={`text-lg font-bold ${
-                        strategySignals.total_return >= 0
-                          ? "text-green-600 dark:text-green-400"
-                          : "text-red-600 dark:text-red-400"
-                      }`}>
-                        {strategySignals.total_return >= 0 ? "+" : ""}{strategySignals.total_return.toFixed(1)}%
-                      </p>
-                    </div>
-                  )}
-                  {strategySignals.total_alpha !== null && (
-                    <div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Total Alpha vs S&P 500</p>
-                      <p className={`text-lg font-bold ${
-                        strategySignals.total_alpha >= 0
-                          ? "text-green-600 dark:text-green-400"
-                          : "text-red-600 dark:text-red-400"
-                      }`}>
-                        {strategySignals.total_alpha >= 0 ? "+" : ""}{strategySignals.total_alpha.toFixed(1)}%
-                      </p>
-                    </div>
-                  )}
-                  {strategySignals.avg_alpha_per_trade !== null && (
-                    <div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Avg Alpha per Trade</p>
-                      <p className={`text-sm font-medium ${
-                        strategySignals.avg_alpha_per_trade >= 0
-                          ? "text-green-600 dark:text-green-400"
-                          : "text-red-600 dark:text-red-400"
-                      }`}>
-                        {strategySignals.avg_alpha_per_trade >= 0 ? "+" : ""}{strategySignals.avg_alpha_per_trade.toFixed(2)}%
-                      </p>
-                    </div>
-                  )}
-                  {strategySignals.win_rate !== null && (
-                    <div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Win Rate</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Strategy</p>
                       <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        {strategySignals.win_rate.toFixed(0)}%
+                        {strategySignals.strategy_name}
                       </p>
                     </div>
-                  )}
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Holding Period</p>
+                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                        {strategySignals.holding_period} quarter{strategySignals.holding_period !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                    <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Number of Trades</p>
+                      <p className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                        {strategySignals.num_trades}
+                      </p>
+                    </div>
+                    {strategySignals.total_return !== null && (
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Total Return</p>
+                        <p className={`text-lg font-bold ${
+                          strategySignals.total_return >= 0
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-red-600 dark:text-red-400"
+                        }`}>
+                          {strategySignals.total_return >= 0 ? "+" : ""}{strategySignals.total_return.toFixed(1)}%
+                        </p>
+                      </div>
+                    )}
+                    {strategySignals.total_alpha !== null && (
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Total Alpha vs S&P 500</p>
+                        <p className={`text-lg font-bold ${
+                          strategySignals.total_alpha >= 0
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-red-600 dark:text-red-400"
+                        }`}>
+                          {strategySignals.total_alpha >= 0 ? "+" : ""}{strategySignals.total_alpha.toFixed(1)}%
+                        </p>
+                      </div>
+                    )}
+                    {strategySignals.avg_alpha_per_trade !== null && (
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Avg Alpha per Trade</p>
+                        <p className={`text-sm font-medium ${
+                          strategySignals.avg_alpha_per_trade >= 0
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-red-600 dark:text-red-400"
+                        }`}>
+                          {strategySignals.avg_alpha_per_trade >= 0 ? "+" : ""}{strategySignals.avg_alpha_per_trade.toFixed(2)}%
+                        </p>
+                      </div>
+                    )}
+                    {strategySignals.win_rate !== null && (
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Win Rate</p>
+                        <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                          {strategySignals.win_rate.toFixed(0)}%
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                  Select a strategy to see how it would have performed on this stock
-                </p>
+              )}
+
+              {/* ML Model Performance Summary - uses visible stats matching chart */}
+              {mlModelSignals && visibleMLStats && (
+                <div className="bg-white dark:bg-gray-900 rounded-lg border border-indigo-200 dark:border-indigo-800 p-4">
+                  <h3 className="text-sm font-semibold text-indigo-600 dark:text-indigo-400 mb-4">
+                    ML Model Performance
+                  </h3>
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Model</p>
+                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                        {mlModelSignals.model_name}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Holding Period</p>
+                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                        {mlModelSignals.holding_period} quarter{mlModelSignals.holding_period !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                    <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Trades in View</p>
+                      <p className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                        {visibleMLStats.numTrades}
+                        {visibleMLStats.totalNumTrades > visibleMLStats.numTrades && (
+                          <span className="text-xs font-normal text-gray-500 ml-1">
+                            of {visibleMLStats.totalNumTrades} total
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    {visibleMLStats.totalReturn !== null && (
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Total Return</p>
+                        <p className={`text-lg font-bold ${
+                          visibleMLStats.totalReturn >= 0
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-red-600 dark:text-red-400"
+                        }`}>
+                          {visibleMLStats.totalReturn >= 0 ? "+" : ""}{visibleMLStats.totalReturn.toFixed(1)}%
+                        </p>
+                      </div>
+                    )}
+                    {visibleMLStats.totalAlpha !== null && (
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Total Alpha vs S&P 500</p>
+                        <p className={`text-lg font-bold ${
+                          visibleMLStats.totalAlpha >= 0
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-red-600 dark:text-red-400"
+                        }`}>
+                          {visibleMLStats.totalAlpha >= 0 ? "+" : ""}{visibleMLStats.totalAlpha.toFixed(1)}%
+                        </p>
+                      </div>
+                    )}
+                    {visibleMLStats.avgAlpha !== null && (
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Avg Alpha per Trade</p>
+                        <p className={`text-sm font-medium ${
+                          visibleMLStats.avgAlpha >= 0
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-red-600 dark:text-red-400"
+                        }`}>
+                          {visibleMLStats.avgAlpha >= 0 ? "+" : ""}{visibleMLStats.avgAlpha.toFixed(2)}%
+                        </p>
+                      </div>
+                    )}
+                    {visibleMLStats.winRate !== null && (
+                      <div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Win Rate</p>
+                        <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                          {visibleMLStats.winRate}%
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Empty state when nothing selected */}
+              {!strategySignals && !mlModelSignals && (
+                <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800 p-4">
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-4">
+                    Performance
+                  </h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Select a strategy or ML model to see how it would have performed on this stock
+                  </p>
+                </div>
               )}
             </div>
           </div>

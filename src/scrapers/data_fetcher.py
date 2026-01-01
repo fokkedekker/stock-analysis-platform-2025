@@ -221,12 +221,26 @@ class DataFetcher:
                 raw_json = EXCLUDED.raw_json
         """
 
+        # Also update tickers table with sector/industry
+        sector = profile.get("sector")
+        industry = profile.get("industry")
+        tickers_query = """
+            UPDATE tickers
+            SET sector = ?, industry = ?, updated_at = ?
+            WHERE symbol = ?
+        """
+        tickers_params = (sector, industry, now, symbol)
+
         if conn is not None:
             with self.db.transaction(conn) as txn:
                 txn.execute(query, params)
+                if sector or industry:
+                    txn.execute(tickers_query, tickers_params)
         else:
             with self.db.get_connection() as c:
                 c.execute(query, params)
+                if sector or industry:
+                    c.execute(tickers_query, tickers_params)
 
     def save_income_statements(
         self,

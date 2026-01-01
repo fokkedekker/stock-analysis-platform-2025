@@ -647,6 +647,7 @@ async def get_strategy_signals(strategy_id: str, symbol: str) -> StrategySignals
         in_position = False
         buy_quarter: str | None = None
         last_match_quarter: str | None = None
+        dropped_out = False  # Track if stock dropped out since buy
 
         for quarter in all_quarters:
             # Get all analysis data for this stock in this quarter
@@ -655,6 +656,7 @@ async def get_strategy_signals(strategy_id: str, symbol: str) -> StrategySignals
             if not stock_data:
                 # No data for this quarter - if in position, check if we should sell
                 if in_position and last_match_quarter:
+                    dropped_out = True
                     planned_sell = _add_quarters(last_match_quarter, holding_period)
                     if quarter >= planned_sell:
                         # Holding period expired, close position
@@ -665,6 +667,7 @@ async def get_strategy_signals(strategy_id: str, symbol: str) -> StrategySignals
                         in_position = False
                         buy_quarter = None
                         last_match_quarter = None
+                        dropped_out = False
                 continue
 
             # Check if stock matches strategy
@@ -676,12 +679,33 @@ async def get_strategy_signals(strategy_id: str, symbol: str) -> StrategySignals
                     in_position = True
                     buy_quarter = quarter
                     last_match_quarter = quarter
+                    dropped_out = False
                 else:
-                    # Extend position - update last match quarter
-                    last_match_quarter = quarter
+                    # Already in position - check if we should close old and start new
+                    if dropped_out and last_match_quarter:
+                        planned_sell = _add_quarters(last_match_quarter, holding_period)
+                        if quarter >= planned_sell:
+                            # Stock dropped out, we're past planned sell, now matches again
+                            # Close old position and start new one
+                            signals.append(_create_signal(
+                                buy_quarter, planned_sell, stock_prices, spy_prices,
+                                current_stock_price, current_spy_price
+                            ))
+                            # Start new position
+                            buy_quarter = quarter
+                            last_match_quarter = quarter
+                            dropped_out = False
+                        else:
+                            # Stock came back before planned sell - extend position
+                            last_match_quarter = quarter
+                            dropped_out = False
+                    else:
+                        # Continuous match - just extend position
+                        last_match_quarter = quarter
             else:
                 # Stock doesn't match this quarter
                 if in_position and last_match_quarter:
+                    dropped_out = True
                     planned_sell = _add_quarters(last_match_quarter, holding_period)
                     if quarter >= planned_sell:
                         # Holding period expired, close position
@@ -692,6 +716,7 @@ async def get_strategy_signals(strategy_id: str, symbol: str) -> StrategySignals
                         in_position = False
                         buy_quarter = None
                         last_match_quarter = None
+                        dropped_out = False
 
         # Handle position still open at end of data
         if in_position and buy_quarter and last_match_quarter:

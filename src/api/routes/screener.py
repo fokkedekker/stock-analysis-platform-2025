@@ -1129,6 +1129,324 @@ async def screen_combined(
         }
 
 
+# ============================================================================
+# Live ML Model Scoring Functions (used by signal generation)
+# ============================================================================
+
+
+def _get_stock_data_for_quarter(conn, quarter: str) -> list[dict]:
+    """Load all stock data with features for a specific quarter.
+
+    Returns list of dicts with symbol and all feature values.
+    """
+    result = conn.execute(
+        """
+        SELECT
+            t.symbol,
+            t.name,
+
+            -- Pre-computed Scores (7)
+            p.f_score as piotroski_score,
+            g.criteria_passed as graham_score,
+            a.z_score as altman_z_score,
+            r.roic,
+            gp.peg_ratio,
+            mf.combined_rank as magic_formula_rank,
+            ff.book_to_market_percentile,
+
+            -- Raw Valuation Metrics (9)
+            km.pe_ratio,
+            km.pb_ratio,
+            km.price_to_sales,
+            km.price_to_free_cash_flow,
+            km.price_to_operating_cash_flow,
+            km.ev_to_ebitda,
+            km.ev_to_sales,
+            km.ev_to_free_cash_flow,
+            km.ev_to_operating_cash_flow,
+
+            -- Raw Profitability Metrics (6)
+            km.roe,
+            km.roa,
+            km.return_on_tangible_assets,
+            km.gross_profit_margin,
+            km.operating_profit_margin,
+            km.net_profit_margin,
+
+            -- Raw Liquidity Metrics (3)
+            km.current_ratio,
+            km.quick_ratio,
+            km.cash_ratio,
+
+            -- Raw Leverage Metrics (5)
+            km.debt_ratio,
+            km.debt_to_equity,
+            km.debt_to_assets,
+            km.net_debt_to_ebitda,
+            km.interest_coverage,
+
+            -- Raw Efficiency Metrics (4)
+            km.asset_turnover,
+            km.inventory_turnover,
+            km.receivables_turnover,
+            km.payables_turnover,
+
+            -- Raw Dividend Metrics (2)
+            km.dividend_yield,
+            km.payout_ratio,
+
+            -- Stability Metrics (5)
+            r.roic_std_dev,
+            r.gross_margin_std_dev,
+            r.fcf_to_net_income,
+            r.reinvestment_rate,
+            r.fcf_yield,
+
+            -- Growth Metrics (4)
+            gp.eps_growth_1yr,
+            gp.eps_growth_3yr,
+            gp.eps_growth_5yr,
+            gp.eps_cagr,
+
+            -- Regime Factors (1)
+            mi.rate_momentum,
+
+            -- Fama-French Percentiles (2)
+            ff.profitability_percentile,
+            ff.asset_growth_percentile,
+
+            -- Additional derived metrics (1)
+            mf.earnings_yield,
+
+            -- Boolean factors - need to derive from quality_tags
+            r.quality_tags,
+            nn.trading_below_ncav,
+            r.fcf_positive_5yr
+
+        FROM tickers t
+        LEFT JOIN (
+            SELECT DISTINCT ON (symbol) *
+            FROM key_metrics
+            WHERE fiscal_date <= (
+                SELECT MAX(fiscal_date) FROM key_metrics
+            )
+            ORDER BY symbol, fiscal_date DESC
+        ) km ON t.symbol = km.symbol
+        LEFT JOIN roic_quality_results r ON t.symbol = r.symbol AND r.analysis_quarter = ?
+        LEFT JOIN piotroski_results p ON t.symbol = p.symbol AND p.analysis_quarter = ?
+        LEFT JOIN graham_results g ON t.symbol = g.symbol AND g.analysis_quarter = ? AND g.mode = 'modern'
+        LEFT JOIN magic_formula_results mf ON t.symbol = mf.symbol AND mf.analysis_quarter = ?
+        LEFT JOIN garp_peg_results gp ON t.symbol = gp.symbol AND gp.analysis_quarter = ?
+        LEFT JOIN altman_results a ON t.symbol = a.symbol AND a.analysis_quarter = ?
+        LEFT JOIN fama_french_results ff ON t.symbol = ff.symbol AND ff.analysis_quarter = ?
+        LEFT JOIN net_net_results nn ON t.symbol = nn.symbol AND nn.analysis_quarter = ?
+        LEFT JOIN (
+            SELECT DISTINCT ON (indicator_date)
+                indicator_date,
+                (treasury_10y - LAG(treasury_10y, 4) OVER (ORDER BY indicator_date)) as rate_momentum
+            FROM macro_indicators
+            ORDER BY indicator_date DESC
+            LIMIT 1
+        ) mi ON TRUE
+        WHERE t.is_active = TRUE
+        """,
+        (quarter, quarter, quarter, quarter, quarter, quarter, quarter, quarter),
+    ).fetchall()
+
+    columns = [desc[0] for desc in conn.description]
+    stocks = [dict(zip(columns, row)) for row in result]
+
+    # Parse boolean tags from quality_tags JSON
+    QUALITY_TAG_MAP = {
+        "Durable Compounder": "has_durable_compounder",
+        "Cash Machine": "has_cash_machine",
+        "Deep Value": "has_deep_value",
+        "Heavy Reinvestor": "has_heavy_reinvestor",
+        "Premium Priced": "has_premium_priced",
+        "Volatile Returns": "has_volatile_returns",
+        "Weak Moat Signal": "has_weak_moat_signal",
+        "Earnings Quality Concern": "has_earnings_quality_concern",
+    }
+
+    for stock in stocks:
+        quality_tags_json = stock.get("quality_tags")
+        stock_tags = set()
+        if quality_tags_json:
+            try:
+                stock_tags = set(json.loads(quality_tags_json))
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        for tag_name, feature_name in QUALITY_TAG_MAP.items():
+            stock[feature_name] = 1.0 if tag_name in stock_tags else 0.0
+
+        stock["trading_below_ncav"] = 1.0 if stock.get("trading_below_ncav") else 0.0
+        stock["fcf_positive_5yr"] = 1.0 if stock.get("fcf_positive_5yr") else 0.0
+
+    return stocks
+
+
+def calculate_live_rankings_elastic_net(
+    conn, run_id: str, quarter: str
+) -> dict[str, dict]:
+    """Calculate live Elastic Net model scores and ranks for all stocks in a quarter.
+
+    Returns: {symbol: {"score": float, "rank": int}}
+    """
+    from src.ml_models import load_elastic_net_result
+
+    # Load model coefficients
+    model_data = load_elastic_net_result(run_id)
+    coefficients = {c["feature_name"]: c["coefficient"] for c in model_data["coefficients"]}
+    features_needed = [f for f, c in coefficients.items() if abs(c) > 1e-8]
+
+    if not features_needed:
+        return {}
+
+    # Get stock data for this quarter
+    stocks = _get_stock_data_for_quarter(conn, quarter)
+    if not stocks:
+        return {}
+
+    # Collect feature values for all stocks
+    stock_feature_vals: list[dict[str, float | None]] = []
+    for stock in stocks:
+        stock_vals = {}
+        for feature in features_needed:
+            val = stock.get(feature)
+            if val is not None:
+                try:
+                    stock_vals[feature] = float(val)
+                except (TypeError, ValueError):
+                    stock_vals[feature] = None
+            else:
+                stock_vals[feature] = None
+        stock_feature_vals.append(stock_vals)
+
+    # Calculate z-scores for each feature across all stocks
+    feature_values: dict[str, list[float]] = {f: [] for f in features_needed}
+    for stock_vals in stock_feature_vals:
+        for feature in features_needed:
+            val = stock_vals.get(feature)
+            if val is not None:
+                feature_values[feature].append(val)
+
+    # Calculate mean and std for each feature
+    feature_stats: dict[str, tuple[float, float]] = {}
+    for feature in features_needed:
+        vals = feature_values[feature]
+        if len(vals) > 0:
+            mean = sum(vals) / len(vals)
+            variance = sum((v - mean) ** 2 for v in vals) / len(vals) if len(vals) > 1 else 1.0
+            std = variance ** 0.5 if variance > 0 else 1.0
+            feature_stats[feature] = (mean, std)
+        else:
+            feature_stats[feature] = (0.0, 1.0)
+
+    # Score each stock
+    scored_stocks = []
+    for i, stock in enumerate(stocks):
+        stock_vals = stock_feature_vals[i]
+        score = 0.0
+        features_used = 0
+
+        for feature in features_needed:
+            val = stock_vals.get(feature)
+            if val is not None:
+                mean, std = feature_stats[feature]
+                z_score = (val - mean) / std if std > 0 else 0.0
+                coef = coefficients.get(feature, 0.0)
+                score += z_score * coef
+                features_used += 1
+
+        # Only include stocks with enough features
+        if features_used >= len(features_needed) * 0.5:
+            scored_stocks.append({
+                "symbol": stock["symbol"],
+                "score": score,
+            })
+
+    # Sort by score descending and assign ranks
+    scored_stocks.sort(key=lambda x: x["score"], reverse=True)
+
+    result = {}
+    for i, s in enumerate(scored_stocks):
+        result[s["symbol"]] = {"score": s["score"], "rank": i + 1}
+
+    return result
+
+
+def calculate_live_rankings_gam(
+    conn, run_id: str, quarter: str
+) -> dict[str, dict]:
+    """Calculate live GAM model scores and ranks for all stocks in a quarter.
+
+    Returns: {symbol: {"score": float, "rank": int}}
+    """
+    import numpy as np
+    from src.ml_models import load_gam_result
+
+    # Load partial dependences
+    model_data = load_gam_result(run_id)
+    partial_deps = model_data["partial_dependences"]
+    features_needed = [pd["feature_name"] for pd in partial_deps]
+
+    if not features_needed:
+        return {}
+
+    pd_lookup = {pd["feature_name"]: pd for pd in partial_deps}
+
+    # Get stock data for this quarter
+    stocks = _get_stock_data_for_quarter(conn, quarter)
+    if not stocks:
+        return {}
+
+    # Score each stock using partial dependence curves
+    scored_stocks = []
+    for stock in stocks:
+        score = 0.0
+        features_used = 0
+
+        for feature in features_needed:
+            val = stock.get(feature)
+            if val is not None:
+                try:
+                    val = float(val)
+                    pd_data = pd_lookup.get(feature)
+                    if pd_data:
+                        x_values = pd_data["x_values"]
+                        y_values = pd_data["y_values"]
+                        effect = float(np.interp(val, x_values, y_values))
+                        score += effect
+                        features_used += 1
+                except (TypeError, ValueError):
+                    pass
+
+        # Only include stocks with enough features
+        if features_used >= len(features_needed) * 0.5:
+            scored_stocks.append({
+                "symbol": stock["symbol"],
+                "score": score,
+            })
+
+    # Sort by score descending and assign ranks
+    scored_stocks.sort(key=lambda x: x["score"], reverse=True)
+
+    result = {}
+    for i, s in enumerate(scored_stocks):
+        result[s["symbol"]] = {"score": s["score"], "rank": i + 1}
+
+    return result
+
+
+def get_quarters_with_analysis_data(conn) -> list[str]:
+    """Get all quarters that have analysis data, sorted ascending."""
+    result = conn.execute(
+        "SELECT DISTINCT analysis_quarter FROM roic_quality_results ORDER BY analysis_quarter"
+    ).fetchall()
+    return [row[0] for row in result]
+
+
 @router.get("/apply-model/{run_id}")
 async def apply_model_to_current(
     run_id: str,
@@ -1137,10 +1455,11 @@ async def apply_model_to_current(
     quarter: str | None = Query(None, description="Analysis quarter. Defaults to latest."),
     limit: int = Query(200, ge=1, le=1000),
 ):
-    """Apply a saved Elastic Net model to current stocks and return ranked predictions.
+    """Apply a saved ML model (Elastic Net or GAM) to current stocks and return ranked predictions.
 
     This endpoint allows you to use a trained ML model as a filter in the Pipeline.
-    Stocks are scored using the model's coefficients applied to z-scored features.
+    - For Elastic Net: Stocks are scored using the model's coefficients applied to z-scored features.
+    - For GAM: Stocks are scored by summing interpolated partial dependence effects for each feature.
 
     Args:
         run_id: The ML model run ID to apply
@@ -1149,28 +1468,89 @@ async def apply_model_to_current(
         quarter: Analysis quarter to use for stock data
         limit: Maximum stocks to return
     """
-    from src.ml_models import load_elastic_net_result
+    from src.ml_models import load_elastic_net_result, load_gam_result, load_lightgbm_result
+    import numpy as np
 
     db = get_db_manager()
 
-    # Load the model coefficients
-    try:
-        model_data = load_elastic_net_result(run_id)
-    except ValueError:
+    # First, determine the model type from the database
+    with db.get_connection() as conn:
+        model_row = conn.execute(
+            "SELECT model_type FROM ml_model_runs WHERE id = ?",
+            (run_id,)
+        ).fetchone()
+
+    if not model_row:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Model run {run_id} not found")
 
-    coefficients = {c["feature_name"]: c["coefficient"] for c in model_data["coefficients"]}
-    features_needed = [f for f, c in coefficients.items() if abs(c) > 1e-8]
+    model_type = model_row[0]
 
-    if not features_needed:
-        return {
-            "screen": "ml_model",
-            "run_id": run_id,
-            "count": 0,
-            "stocks": [],
-            "error": "Model has no non-zero coefficients",
-        }
+    # Load model data based on type
+    if model_type == "gam":
+        try:
+            model_data = load_gam_result(run_id)
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail=f"GAM model run {run_id} not found")
+
+        partial_deps = model_data["partial_dependences"]
+        features_needed = [pd["feature_name"] for pd in partial_deps]
+
+        if not features_needed:
+            return {
+                "screen": "ml_model",
+                "run_id": run_id,
+                "model_type": "gam",
+                "count": 0,
+                "stocks": [],
+                "error": "Model has no partial dependence data",
+            }
+
+        # Build lookup for partial dependence curves
+        pd_lookup = {pd["feature_name"]: pd for pd in partial_deps}
+    elif model_type == "lightgbm":
+        # LightGBM: Use feature importance as weights for z-scored features
+        try:
+            model_data = load_lightgbm_result(run_id)
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail=f"LightGBM model run {run_id} not found")
+
+        feature_importances = model_data["feature_importances"]
+        # Use importance_gain as the weight (similar to coefficients)
+        coefficients = {fi["feature_name"]: fi["importance_gain"] for fi in feature_importances}
+        features_needed = [f for f, c in coefficients.items() if c > 0]
+
+        if not features_needed:
+            return {
+                "screen": "ml_model",
+                "run_id": run_id,
+                "model_type": "lightgbm",
+                "count": 0,
+                "stocks": [],
+                "error": "Model has no non-zero feature importances",
+            }
+    else:
+        # Elastic Net
+        try:
+            model_data = load_elastic_net_result(run_id)
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail=f"Elastic Net model run {run_id} not found")
+
+        coefficients = {c["feature_name"]: c["coefficient"] for c in model_data["coefficients"]}
+        features_needed = [f for f, c in coefficients.items() if abs(c) > 1e-8]
+
+        if not features_needed:
+            return {
+                "screen": "ml_model",
+                "run_id": run_id,
+                "model_type": "elastic_net",
+                "count": 0,
+                "stocks": [],
+                "error": "Model has no non-zero coefficients",
+            }
 
     with db.get_connection() as conn:
         # Get the latest quarter if not specified
@@ -1338,8 +1718,7 @@ async def apply_model_to_current(
         stock["trading_below_ncav"] = 1.0 if stock.get("trading_below_ncav") else 0.0
         stock["fcf_positive_5yr"] = 1.0 if stock.get("fcf_positive_5yr") else 0.0
 
-    # Calculate z-scores for each feature across all stocks
-    feature_values: dict[str, list[float]] = {f: [] for f in features_needed}
+    # Collect feature values for all stocks
     stock_feature_vals: list[dict[str, float | None]] = []
 
     for stock in stocks:
@@ -1348,50 +1727,87 @@ async def apply_model_to_current(
             val = stock.get(feature)
             if val is not None:
                 try:
-                    val = float(val)
-                    feature_values[feature].append(val)
-                    stock_vals[feature] = val
+                    stock_vals[feature] = float(val)
                 except (TypeError, ValueError):
                     stock_vals[feature] = None
             else:
                 stock_vals[feature] = None
         stock_feature_vals.append(stock_vals)
 
-    # Calculate mean and std for each feature
-    feature_stats: dict[str, tuple[float, float]] = {}
-    for feature in features_needed:
-        vals = feature_values[feature]
-        if len(vals) > 0:
-            mean = sum(vals) / len(vals)
-            variance = sum((v - mean) ** 2 for v in vals) / len(vals) if len(vals) > 1 else 1.0
-            std = variance ** 0.5 if variance > 0 else 1.0
-            feature_stats[feature] = (mean, std)
-        else:
-            feature_stats[feature] = (0.0, 1.0)
+    # Scoring differs by model type
+    if model_type == "gam":
+        # GAM: Score by interpolating partial dependence curves
+        scored_stocks = []
+        for i, stock in enumerate(stocks):
+            stock_vals = stock_feature_vals[i]
+            score = 0.0
+            features_used = 0
 
-    # Score each stock
-    scored_stocks = []
-    for i, stock in enumerate(stocks):
-        stock_vals = stock_feature_vals[i]
-        score = 0.0
-        features_used = 0
+            for feature in features_needed:
+                val = stock_vals.get(feature)
+                if val is not None:
+                    pd_data = pd_lookup.get(feature)
+                    if pd_data:
+                        x_values = pd_data["x_values"]
+                        y_values = pd_data["y_values"]
+                        # Interpolate the effect for this feature value
+                        effect = float(np.interp(val, x_values, y_values))
+                        score += effect
+                        features_used += 1
 
+            # Only include stocks with enough features
+            if features_used >= len(features_needed) * 0.5:
+                scored_stocks.append({
+                    **stock,
+                    "ml_score": score,
+                    "features_used": features_used,
+                })
+    elif model_type in ("elastic_net", "lightgbm"):
+        # Elastic Net & LightGBM: Score using z-scored features * coefficients/importance
+        # Calculate z-scores for each feature across all stocks
+        feature_values: dict[str, list[float]] = {f: [] for f in features_needed}
+
+        for stock_vals in stock_feature_vals:
+            for feature in features_needed:
+                val = stock_vals.get(feature)
+                if val is not None:
+                    feature_values[feature].append(val)
+
+        # Calculate mean and std for each feature
+        feature_stats: dict[str, tuple[float, float]] = {}
         for feature in features_needed:
-            val = stock_vals.get(feature)
-            if val is not None:
-                mean, std = feature_stats[feature]
-                z_score = (val - mean) / std if std > 0 else 0.0
-                coef = coefficients.get(feature, 0.0)
-                score += z_score * coef
-                features_used += 1
+            vals = feature_values[feature]
+            if len(vals) > 0:
+                mean = sum(vals) / len(vals)
+                variance = sum((v - mean) ** 2 for v in vals) / len(vals) if len(vals) > 1 else 1.0
+                std = variance ** 0.5 if variance > 0 else 1.0
+                feature_stats[feature] = (mean, std)
+            else:
+                feature_stats[feature] = (0.0, 1.0)
 
-        # Only include stocks with enough features
-        if features_used >= len(features_needed) * 0.5:
-            scored_stocks.append({
-                **stock,
-                "ml_score": score,
-                "features_used": features_used,
-            })
+        # Score each stock
+        scored_stocks = []
+        for i, stock in enumerate(stocks):
+            stock_vals = stock_feature_vals[i]
+            score = 0.0
+            features_used = 0
+
+            for feature in features_needed:
+                val = stock_vals.get(feature)
+                if val is not None:
+                    mean, std = feature_stats[feature]
+                    z_score = (val - mean) / std if std > 0 else 0.0
+                    coef = coefficients.get(feature, 0.0)
+                    score += z_score * coef
+                    features_used += 1
+
+            # Only include stocks with enough features
+            if features_used >= len(features_needed) * 0.5:
+                scored_stocks.append({
+                    **stock,
+                    "ml_score": score,
+                    "features_used": features_used,
+                })
 
     # Sort by score descending
     scored_stocks.sort(key=lambda x: x["ml_score"], reverse=True)
@@ -1413,12 +1829,13 @@ async def apply_model_to_current(
     return {
         "screen": "ml_model",
         "run_id": run_id,
+        "model_type": model_type,
         "quarter": quarter,
         "config": {
             "top_percentile": top_percentile,
             "min_score": min_score,
             "features_used": features_needed,
-            "n_coefficients": len([c for c in coefficients.values() if abs(c) > 1e-8]),
+            "n_features": len(features_needed),
         },
         "count": len(scored_stocks),
         "total_scored": len(scored_stocks),

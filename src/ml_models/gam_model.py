@@ -1,11 +1,11 @@
 """
-Elastic Net model for cross-sectional alpha prediction.
+GAM (Generalized Additive Model) for cross-sectional alpha prediction.
 
 Key features:
-1. Cross-sectional Z-score normalization per quarter
-2. Winsorization at 1st/99th percentile
-3. Time-series CV (train on past quarters, validate on future)
-4. Coefficient stability tracking across CV folds
+1. Non-linear relationships via spline basis functions
+2. Partial dependence plots show effect shape for each feature
+3. Identifies "sweet spots" (optimal ranges) for each feature
+4. Same preprocessing as Elastic Net (Z-score per quarter, winsorization)
 """
 
 import json
@@ -16,199 +16,71 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import numpy as np
+from pygam import LinearGAM, s
 from scipy import stats
-from sklearn.linear_model import ElasticNetCV
 
 from src.database.connection import get_db_manager
 from src.factor_discovery.dataset_builder import DatasetBuilder
+from src.ml_models.elastic_net_model import (
+    ELASTIC_NET_FEATURES,
+    ICHistoryPoint,
+    StockPrediction,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# Features to use in the model - matches factor_analyzer.py NUMERICAL_FACTORS + BOOLEAN_FACTORS
-# This ensures consistency between Factor Discovery and Elastic Net
-
-ELASTIC_NET_FEATURES = [
-    # =========================================================================
-    # Pre-computed Scores (7 factors)
-    # =========================================================================
-    "piotroski_score",
-    "graham_score",
-    "altman_z_score",
-    "roic",
-    "peg_ratio",
-    "magic_formula_rank",
-    "book_to_market_percentile",
-
-    # =========================================================================
-    # Raw Valuation Metrics (9 factors)
-    # =========================================================================
-    "pe_ratio",
-    "pb_ratio",
-    "price_to_sales",
-    "price_to_free_cash_flow",
-    "price_to_operating_cash_flow",
-    "ev_to_ebitda",
-    "ev_to_sales",
-    "ev_to_free_cash_flow",
-    "ev_to_operating_cash_flow",
-
-    # =========================================================================
-    # Raw Profitability Metrics (6 factors)
-    # =========================================================================
-    "roe",
-    "roa",
-    "return_on_tangible_assets",
-    "gross_profit_margin",
-    "operating_profit_margin",
-    "net_profit_margin",
-
-    # =========================================================================
-    # Raw Liquidity Metrics (3 factors)
-    # =========================================================================
-    "current_ratio",
-    "quick_ratio",
-    "cash_ratio",
-
-    # =========================================================================
-    # Raw Leverage Metrics (5 factors)
-    # =========================================================================
-    "debt_ratio",
-    "debt_to_equity",
-    "debt_to_assets",
-    "net_debt_to_ebitda",
-    "interest_coverage",
-
-    # =========================================================================
-    # Raw Efficiency Metrics (4 factors)
-    # =========================================================================
-    "asset_turnover",
-    "inventory_turnover",
-    "receivables_turnover",
-    "payables_turnover",
-
-    # =========================================================================
-    # Raw Dividend Metrics (2 factors)
-    # =========================================================================
-    "dividend_yield",
-    "payout_ratio",
-
-    # =========================================================================
-    # Stability Metrics (5 factors)
-    # =========================================================================
-    "roic_std_dev",
-    "gross_margin_std_dev",
-    "fcf_to_net_income",
-    "reinvestment_rate",
-    "fcf_yield",
-
-    # =========================================================================
-    # Growth Metrics (4 factors)
-    # =========================================================================
-    "eps_growth_1yr",
-    "eps_growth_3yr",
-    "eps_growth_5yr",
-    "eps_cagr",
-
-    # =========================================================================
-    # Regime Factors (1 numerical)
-    # =========================================================================
-    "rate_momentum",
-
-    # =========================================================================
-    # Fama-French Percentiles (2 factors, beyond book_to_market_percentile)
-    # =========================================================================
-    "profitability_percentile",
-    "asset_growth_percentile",
-
-    # =========================================================================
-    # Additional derived metrics
-    # =========================================================================
-    "earnings_yield",  # From Magic Formula
-
-    # =========================================================================
-    # Boolean factors (as 0/1 numerical) - 10 factors
-    # =========================================================================
-    "has_durable_compounder",
-    "has_cash_machine",
-    "has_deep_value",
-    "has_heavy_reinvestor",
-    "has_premium_priced",
-    "has_volatile_returns",
-    "has_weak_moat_signal",
-    "has_earnings_quality_concern",
-    "trading_below_ncav",
-    "fcf_positive_5yr",
-]
-# Total: 7 + 9 + 6 + 3 + 5 + 4 + 2 + 5 + 4 + 1 + 2 + 1 + 10 = 59 features
-
-
 @dataclass
-class ElasticNetConfig:
-    """Configuration for Elastic Net model training."""
+class GAMConfig:
+    """Configuration for GAM model training."""
 
     holding_period: int = 4
     quarters: list[str] = field(default_factory=list)
     train_end_quarter: str | None = None
     min_samples_per_quarter: int = 50
     winsorize_percentile: float = 0.01  # 1st/99th
-    l1_ratios: list[float] = field(default_factory=lambda: [0.1, 0.5, 0.7, 0.9, 0.95, 1.0])
+    n_splines: int = 15  # Number of spline basis functions per feature
+    lam: float = 0.6  # Regularization (higher = smoother)
     cv_folds: int = 5
     features: list[str] = field(default_factory=lambda: ELASTIC_NET_FEATURES.copy())
-    run_id: str | None = None  # Optional: pass in to use specific run_id
+    run_id: str | None = None
     target_type: str = "raw"  # "raw", "beta_adjusted", "sector_adjusted", "full_adjusted"
 
 
 @dataclass
-class CoefficientInfo:
-    """Information about a single coefficient."""
+class PartialDependence:
+    """Partial dependence for one feature."""
 
     feature_name: str
-    coefficient: float
-    coefficient_std: float
-    stability_score: float  # % of CV folds with same sign
+    x_values: list[float]  # 100 points across feature range
+    y_values: list[float]  # Effect on alpha at each x
+    optimal_min: float | None  # Start of sweet spot
+    optimal_max: float | None  # End of sweet spot
+    peak_x: float | None  # X value with max effect
+    peak_y: float  # Max effect value
     importance_rank: int
 
 
 @dataclass
-class ICHistoryPoint:
-    """IC (Information Coefficient) for one quarter."""
-
-    quarter: str
-    ic: float
-    ic_pvalue: float
-    n_samples: int
-
-
-@dataclass
-class StockPrediction:
-    """Prediction for a single stock."""
-
-    symbol: str
-    predicted_alpha: float
-    predicted_rank: int
-
-
-@dataclass
-class ElasticNetResult:
-    """Result of Elastic Net training."""
+class GAMResult:
+    """Result of GAM training."""
 
     run_id: str
-    config: ElasticNetConfig
+    config: GAMConfig
     status: str
     error_message: str | None
     duration_seconds: float
     # Performance metrics
     train_ic: float | None
     test_ic: float | None
+    train_r2: float | None  # Pseudo R² from GAM
     n_train_samples: int
     n_test_samples: int
-    # Model parameters
-    best_alpha: float | None
-    best_l1_ratio: float | None
-    n_features_selected: int
-    # Coefficients
-    coefficients: list[CoefficientInfo]
+    # Model info
+    n_features: int
+    best_lam: float | None
+    # Partial dependences
+    partial_dependences: list[PartialDependence]
     # IC over time
     ic_history: list[ICHistoryPoint]
     # Current predictions (latest quarter)
@@ -218,18 +90,19 @@ class ElasticNetResult:
     test_quarters: list[str]
 
 
-class ElasticNetModel:
+class GAMModel:
     """
-    Elastic Net regression for cross-sectional alpha prediction.
+    Generalized Additive Model for cross-sectional alpha prediction.
 
     Methodology:
     1. Load observations from DatasetBuilder
     2. Z-score features cross-sectionally (within each quarter)
     3. Winsorize outliers at 1/99 percentile
     4. Split by time: train on earlier quarters, test on later
-    5. Fit ElasticNetCV with time-series CV
-    6. Track coefficient stability across folds
-    7. Generate predictions for latest quarter
+    5. Fit GAM with spline terms for each feature
+    6. Extract partial dependence curves
+    7. Find optimal ranges (where effect is >= 80% of max)
+    8. Generate predictions for latest quarter
     """
 
     def __init__(
@@ -237,43 +110,33 @@ class ElasticNetModel:
         progress_callback: Callable[[dict], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ):
-        """
-        Initialize model.
-
-        Args:
-            progress_callback: Optional callback for progress updates
-            cancel_check: Optional function to check if training should be cancelled
-        """
         self.progress_callback = progress_callback
         self.cancel_check = cancel_check
-        self._model = None
+        self._model: LinearGAM | None = None
         self._feature_names: list[str] = []
-        self._feature_means: dict[str, dict] = {}  # {quarter: {feature: mean}}
-        self._feature_stds: dict[str, dict] = {}  # {quarter: {feature: std}}
+        self._feature_means: dict[str, np.ndarray] = {}
+        self._feature_stds: dict[str, np.ndarray] = {}
 
     def _report_progress(self, stage: str, percent: int, message: str):
-        """Report progress if callback is set."""
         if self.progress_callback:
             self.progress_callback(
                 {"stage": stage, "percent": percent, "message": message}
             )
 
     def _check_cancelled(self):
-        """Check if training should be cancelled."""
         if self.cancel_check and self.cancel_check():
             raise InterruptedError("Training cancelled by user")
 
-    def train(self, config: ElasticNetConfig) -> ElasticNetResult:
+    def train(self, config: GAMConfig) -> GAMResult:
         """
-        Train the Elastic Net model.
+        Train the GAM model.
 
         Args:
             config: Training configuration
 
         Returns:
-            ElasticNetResult with coefficients, performance metrics, and predictions
+            GAMResult with partial dependences, performance metrics, and predictions
         """
-        # Use provided run_id or generate a new one
         run_id = config.run_id if config.run_id else str(uuid.uuid4())[:8]
         start_time = time.time()
 
@@ -317,7 +180,6 @@ class ElasticNetModel:
             if config.train_end_quarter:
                 train_mask = quarters <= config.train_end_quarter
             else:
-                # Default: use first 80% of quarters for training
                 unique_quarters = sorted(set(quarters))
                 split_idx = int(len(unique_quarters) * 0.8)
                 train_quarters_set = set(unique_quarters[:split_idx])
@@ -333,18 +195,14 @@ class ElasticNetModel:
             train_quarters_list = sorted(set(quarters_train))
             test_quarters_list = sorted(set(quarters_test))
 
-            logger.info(
-                f"Train: {len(X_train)} samples, {len(train_quarters_list)} quarters"
-            )
-            logger.info(
-                f"Test: {len(X_test)} samples, {len(test_quarters_list)} quarters"
-            )
+            logger.info(f"Train: {len(X_train)} samples, {len(train_quarters_list)} quarters")
+            logger.info(f"Test: {len(X_test)} samples, {len(test_quarters_list)} quarters")
 
             if len(X_train) < 100:
                 raise ValueError(f"Not enough training samples: {len(X_train)}")
 
             # 4. Preprocess (Z-score per quarter, winsorize)
-            self._report_progress("preprocess", 30, "Preprocessing features...")
+            self._report_progress("preprocess", 25, "Preprocessing features...")
             self._check_cancelled()
 
             X_train_proc = self._preprocess_fit_transform(
@@ -354,52 +212,42 @@ class ElasticNetModel:
                 X_test, quarters_test, config.winsorize_percentile
             )
 
-            # 5. Fit ElasticNetCV
-            self._report_progress("train", 40, "Training model...")
+            # 5. Build and fit GAM
+            self._report_progress("fitting", 30, "Building GAM model...")
             self._check_cancelled()
 
-            self._model = ElasticNetCV(
-                l1_ratio=config.l1_ratios,
-                cv=config.cv_folds,
-                max_iter=10000,
-                n_jobs=-1,
-            )
+            # Build GAM with spline terms for each feature
+            n_features = len(config.features)
+
+            # Start with first term
+            gam = s(0, n_splines=config.n_splines, lam=config.lam)
+
+            # Add remaining terms
+            for i in range(1, n_features):
+                gam = gam + s(i, n_splines=config.n_splines, lam=config.lam)
+
+            self._model = LinearGAM(gam)
+
+            self._report_progress("fitting", 40, "Fitting GAM model...")
             self._model.fit(X_train_proc, y_train)
 
-            logger.info(f"Best alpha: {self._model.alpha_:.6f}")
-            logger.info(f"Best l1_ratio: {self._model.l1_ratio_:.2f}")
+            logger.info("GAM model fitted successfully")
 
-            # 6. Calculate coefficient stability
-            self._report_progress("stability", 60, "Analyzing coefficient stability...")
+            # Get R² (compute manually for reliability)
+            train_r2 = None
+            try:
+                from sklearn.metrics import r2_score
+                y_pred_train = self._model.predict(X_train_proc)
+                train_r2 = float(r2_score(y_train, y_pred_train))
+                logger.info(f"Train R²: {train_r2:.4f}")
+            except Exception as e:
+                logger.warning(f"Could not compute R²: {e}")
+
+            # 6. Compute partial dependence
+            self._report_progress("partial_dep", 50, "Computing partial dependence...")
             self._check_cancelled()
 
-            coef_stability = self._calculate_coefficient_stability(
-                X_train_proc, y_train, quarters_train, config
-            )
-
-            # Build coefficient info list
-            coefficients = []
-            coefs = self._model.coef_
-            abs_coefs = np.abs(coefs)
-            ranks = (-abs_coefs).argsort().argsort() + 1  # 1 = most important
-
-            for i, feature in enumerate(self._feature_names):
-                coefficients.append(
-                    CoefficientInfo(
-                        feature_name=feature,
-                        coefficient=float(coefs[i]),
-                        coefficient_std=coef_stability.get(feature, {}).get("std", 0.0),
-                        stability_score=coef_stability.get(feature, {}).get(
-                            "stability", 0.0
-                        ),
-                        importance_rank=int(ranks[i]),
-                    )
-                )
-
-            # Sort by absolute coefficient
-            coefficients.sort(key=lambda x: abs(x.coefficient), reverse=True)
-
-            n_features_selected = int((abs_coefs > 1e-6).sum())
+            partial_dependences = self._compute_partial_dependence(X_train_proc, config)
 
             # 7. Calculate IC over time for test quarters
             self._report_progress("ic", 70, "Calculating IC history...")
@@ -410,10 +258,9 @@ class ElasticNetModel:
             # Calculate IC for test quarters only
             for quarter in test_quarters_list:
                 q_mask = quarters == quarter
-                if q_mask.sum() < 10:  # Need at least 10 stocks
+                if q_mask.sum() < 10:
                     continue
 
-                # Get preprocessed features for this quarter
                 X_quarter = X[q_mask]
                 X_quarter_proc = self._preprocess_transform(
                     X_quarter, np.array([quarter] * len(X_quarter)), config.winsorize_percentile
@@ -434,6 +281,8 @@ class ElasticNetModel:
                     )
 
             # 8. Calculate overall IC
+            self._report_progress("ic", 80, "Calculating overall IC...")
+
             if len(X_train_proc) > 0:
                 y_train_pred = self._model.predict(X_train_proc)
                 train_ic, _ = stats.spearmanr(y_train_pred, y_train)
@@ -449,7 +298,7 @@ class ElasticNetModel:
                 test_ic = None
 
             # 9. Generate predictions for latest quarter
-            self._report_progress("predict", 85, "Generating predictions...")
+            self._report_progress("predict", 90, "Generating predictions...")
             self._check_cancelled()
 
             predictions = self._generate_predictions(
@@ -460,7 +309,7 @@ class ElasticNetModel:
 
             duration = time.time() - start_time
 
-            return ElasticNetResult(
+            return GAMResult(
                 run_id=run_id,
                 config=config,
                 status="completed",
@@ -468,12 +317,12 @@ class ElasticNetModel:
                 duration_seconds=duration,
                 train_ic=train_ic,
                 test_ic=test_ic,
+                train_r2=train_r2,
                 n_train_samples=len(X_train),
                 n_test_samples=len(X_test),
-                best_alpha=float(self._model.alpha_),
-                best_l1_ratio=float(self._model.l1_ratio_),
-                n_features_selected=n_features_selected,
-                coefficients=coefficients,
+                n_features=n_features,
+                best_lam=config.lam,
+                partial_dependences=partial_dependences,
                 ic_history=ic_history,
                 predictions=predictions,
                 train_quarters=train_quarters_list,
@@ -481,7 +330,7 @@ class ElasticNetModel:
             )
 
         except InterruptedError:
-            return ElasticNetResult(
+            return GAMResult(
                 run_id=run_id,
                 config=config,
                 status="cancelled",
@@ -489,12 +338,12 @@ class ElasticNetModel:
                 duration_seconds=time.time() - start_time,
                 train_ic=None,
                 test_ic=None,
+                train_r2=None,
                 n_train_samples=0,
                 n_test_samples=0,
-                best_alpha=None,
-                best_l1_ratio=None,
-                n_features_selected=0,
-                coefficients=[],
+                n_features=0,
+                best_lam=None,
+                partial_dependences=[],
                 ic_history=[],
                 predictions=[],
                 train_quarters=[],
@@ -502,8 +351,8 @@ class ElasticNetModel:
             )
 
         except Exception as e:
-            logger.exception(f"Error training Elastic Net: {e}")
-            return ElasticNetResult(
+            logger.exception(f"Error training GAM: {e}")
+            return GAMResult(
                 run_id=run_id,
                 config=config,
                 status="failed",
@@ -511,12 +360,12 @@ class ElasticNetModel:
                 duration_seconds=time.time() - start_time,
                 train_ic=None,
                 test_ic=None,
+                train_r2=None,
                 n_train_samples=0,
                 n_test_samples=0,
-                best_alpha=None,
-                best_l1_ratio=None,
-                n_features_selected=0,
-                coefficients=[],
+                n_features=0,
+                best_lam=None,
+                partial_dependences=[],
                 ic_history=[],
                 predictions=[],
                 train_quarters=[],
@@ -526,16 +375,7 @@ class ElasticNetModel:
     def _prepare_data(
         self, observations: list[dict], features: list[str]
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Prepare feature matrix and target vector.
-
-        Args:
-            observations: List of observation dicts from DatasetBuilder
-            features: List of feature names to use
-
-        Returns:
-            Tuple of (X, y, quarters, symbols) as numpy arrays
-        """
+        """Prepare feature matrix and target vector."""
         n_samples = len(observations)
         n_features = len(features)
 
@@ -562,18 +402,14 @@ class ElasticNetModel:
                 median = np.median(col[valid_mask])
                 X[~valid_mask, j] = median
             else:
-                X[:, j] = 0  # All missing - fill with 0
+                X[:, j] = 0
 
         return X, y, np.array(quarters), np.array(symbols)
 
     def _preprocess_fit_transform(
         self, X: np.ndarray, quarters: np.ndarray, winsorize_pct: float
     ) -> np.ndarray:
-        """
-        Fit preprocessing parameters and transform training data.
-
-        Per-quarter cross-sectional Z-score normalization with winsorization.
-        """
+        """Fit preprocessing parameters and transform training data."""
         X_proc = X.copy()
         self._feature_means = {}
         self._feature_stds = {}
@@ -604,9 +440,7 @@ class ElasticNetModel:
     def _preprocess_transform(
         self, X: np.ndarray, quarters: np.ndarray, winsorize_pct: float
     ) -> np.ndarray:
-        """
-        Transform test data using fitted parameters (or compute new for unseen quarters).
-        """
+        """Transform test data using fitted parameters."""
         X_proc = X.copy()
 
         for quarter in np.unique(quarters):
@@ -620,7 +454,7 @@ class ElasticNetModel:
                 )
                 X_q[:, col] = np.clip(X_q[:, col], p_low, p_high)
 
-            # Use stored parameters if available, otherwise compute new
+            # Use stored parameters if available
             if quarter in self._feature_means:
                 means = self._feature_means[quarter]
                 stds = self._feature_stds[quarter]
@@ -633,79 +467,110 @@ class ElasticNetModel:
 
         return X_proc
 
-    def _calculate_coefficient_stability(
-        self,
-        X: np.ndarray,
-        y: np.ndarray,
-        quarters: np.ndarray,
-        config: ElasticNetConfig,
-    ) -> dict[str, dict]:
+    def _compute_partial_dependence(
+        self, X: np.ndarray, config: GAMConfig
+    ) -> list[PartialDependence]:
         """
-        Calculate coefficient stability across time-series CV folds.
+        Compute partial dependence for each feature.
+
+        Returns list of PartialDependence objects with effect curves and optimal ranges.
+        """
+        if self._model is None:
+            return []
+
+        partial_deps = []
+        importance_scores = []
+
+        for i, feature_name in enumerate(self._feature_names):
+            try:
+                # Generate grid of x values
+                x_min, x_max = X[:, i].min(), X[:, i].max()
+                x_grid = np.linspace(x_min, x_max, 100)
+
+                # Get partial dependence using pyGAM's built-in method
+                # Create a matrix for prediction with the grid values for this feature
+                # and mean values for other features
+                X_pd = np.tile(X.mean(axis=0), (100, 1))
+                X_pd[:, i] = x_grid
+
+                # Get the partial effect for this term
+                y_pd = self._model.partial_dependence(term=i, X=X_pd)
+
+                # Find optimal range (where effect >= 80% of max)
+                optimal_min, optimal_max, peak_x = self._find_optimal_range(
+                    x_grid, y_pd, threshold_pct=0.8
+                )
+
+                peak_y = float(y_pd.max())
+                importance = abs(peak_y)  # Use max effect as importance
+                importance_scores.append((i, importance))
+
+                partial_deps.append(
+                    PartialDependence(
+                        feature_name=feature_name,
+                        x_values=x_grid.tolist(),
+                        y_values=y_pd.tolist(),
+                        optimal_min=optimal_min,
+                        optimal_max=optimal_max,
+                        peak_x=peak_x,
+                        peak_y=peak_y,
+                        importance_rank=0,  # Will be set after sorting
+                    )
+                )
+
+            except Exception as e:
+                logger.warning(f"Could not compute partial dependence for {feature_name}: {e}")
+                continue
+
+        # Rank by importance (max effect magnitude)
+        importance_scores.sort(key=lambda x: x[1], reverse=True)
+        rank_map = {idx: rank + 1 for rank, (idx, _) in enumerate(importance_scores)}
+
+        for pd in partial_deps:
+            feature_idx = self._feature_names.index(pd.feature_name)
+            pd.importance_rank = rank_map.get(feature_idx, len(self._feature_names))
+
+        # Sort by importance rank
+        partial_deps.sort(key=lambda x: x.importance_rank)
+
+        return partial_deps
+
+    def _find_optimal_range(
+        self, x_grid: np.ndarray, y_pd: np.ndarray, threshold_pct: float = 0.8
+    ) -> tuple[float | None, float | None, float | None]:
+        """
+        Find the range of x values where effect is >= threshold_pct of max.
 
         Returns:
-            Dict of {feature_name: {"std": float, "stability": float}}
-            where stability = % of folds with same sign as final coefficient
+            (optimal_min, optimal_max, peak_x)
         """
-        unique_quarters = sorted(set(quarters))
-        n_quarters = len(unique_quarters)
+        if len(y_pd) == 0:
+            return None, None, None
 
-        # Need at least some quarters for meaningful stability
-        if n_quarters < 5:
-            return {f: {"std": 0.0, "stability": 1.0} for f in self._feature_names}
+        max_effect = y_pd.max()
+        min_effect = y_pd.min()
+        effect_range = max_effect - min_effect
 
-        coef_history = []
+        if effect_range < 1e-6:
+            # No meaningful effect
+            return None, None, None
 
-        # Rolling window CV: train on 60% of quarters, validate on next 20%
-        min_train = max(5, n_quarters // 3)
+        # Find where effect is above threshold
+        threshold = min_effect + (effect_range * threshold_pct)
+        above_threshold = x_grid[y_pd >= threshold]
 
-        for i in range(min_train, n_quarters - 2):
-            train_quarters_set = set(unique_quarters[:i])
-            train_mask = np.array([q in train_quarters_set for q in quarters])
+        peak_idx = np.argmax(y_pd)
+        peak_x = float(x_grid[peak_idx])
 
-            if train_mask.sum() < 100:
-                continue
-
-            try:
-                model = ElasticNetCV(
-                    l1_ratio=config.l1_ratios,
-                    cv=min(config.cv_folds, 3),
-                    max_iter=5000,
-                    n_jobs=-1,  # Use all CPU cores
-                )
-                model.fit(X[train_mask], y[train_mask])
-                coef_history.append(model.coef_.copy())
-            except Exception:
-                continue
-
-        if len(coef_history) < 2:
-            return {f: {"std": 0.0, "stability": 1.0} for f in self._feature_names}
-
-        coef_array = np.array(coef_history)  # (n_folds, n_features)
-        final_coefs = self._model.coef_
-
-        stability = {}
-        for i, feature in enumerate(self._feature_names):
-            col_coefs = coef_array[:, i]
-            final_sign = np.sign(final_coefs[i]) if final_coefs[i] != 0 else 0
-
-            # % of folds with same sign
-            if final_sign != 0:
-                same_sign = (np.sign(col_coefs) == final_sign).mean()
-            else:
-                same_sign = 1.0  # If final is 0, count as stable
-
-            stability[feature] = {
-                "std": float(col_coefs.std()),
-                "stability": float(same_sign),
-            }
-
-        return stability
+        if len(above_threshold) > 0:
+            return float(above_threshold.min()), float(above_threshold.max()), peak_x
+        else:
+            return None, None, peak_x
 
     def _generate_predictions(
         self,
         observations: list[dict],
-        config: ElasticNetConfig,
+        config: GAMConfig,
         X: np.ndarray,
         quarters: np.ndarray,
         symbols: np.ndarray,
@@ -714,14 +579,12 @@ class ElasticNetModel:
         if self._model is None:
             return []
 
-        # Find latest quarter
         latest_quarter = max(set(quarters))
         latest_mask = quarters == latest_quarter
 
         if latest_mask.sum() == 0:
             return []
 
-        # Preprocess latest quarter data
         X_latest = X[latest_mask]
         symbols_latest = symbols[latest_mask]
 
@@ -729,10 +592,7 @@ class ElasticNetModel:
             X_latest, np.array([latest_quarter] * len(X_latest)), config.winsorize_percentile
         )
 
-        # Generate predictions
         y_pred = self._model.predict(X_latest_proc)
-
-        # Rank predictions (1 = highest predicted alpha)
         ranks = (-y_pred).argsort().argsort() + 1
 
         predictions = []
@@ -745,9 +605,7 @@ class ElasticNetModel:
                 )
             )
 
-        # Sort by rank
         predictions.sort(key=lambda x: x.predicted_rank)
-
         return predictions
 
     def predict(self, X: np.ndarray, quarters: np.ndarray) -> np.ndarray:
@@ -759,16 +617,16 @@ class ElasticNetModel:
         return self._model.predict(X_proc)
 
 
-def save_elastic_net_result(
-    result: ElasticNetResult,
+def save_gam_result(
+    result: GAMResult,
     progress_callback: Callable[[dict], None] | None = None,
 ) -> str:
     """
-    Save Elastic Net result to database.
+    Save GAM result to database.
 
     Args:
         result: The training result to save
-        progress_callback: Optional callback for progress updates during save
+        progress_callback: Optional callback for progress updates
 
     Returns:
         run_id
@@ -782,14 +640,15 @@ def save_elastic_net_result(
     report("Saving model configuration...")
 
     with db.get_connection() as conn:
-        # Save to ml_model_runs
+        # Save to ml_model_runs (reuse table with model_type='gam')
         config_json = json.dumps(
             {
                 "holding_period": result.config.holding_period,
                 "quarters": result.config.quarters,
                 "train_end_quarter": result.config.train_end_quarter,
                 "features": result.config.features,
-                "l1_ratios": result.config.l1_ratios,
+                "n_splines": result.config.n_splines,
+                "lam": result.config.lam,
                 "cv_folds": result.config.cv_folds,
                 "target_type": result.config.target_type,
             }
@@ -800,15 +659,15 @@ def save_elastic_net_result(
             INSERT INTO ml_model_runs (
                 id, model_type, status, holding_period,
                 train_end_quarter, test_start_quarter,
-                config_json, train_ic, test_ic,
+                config_json, train_ic, test_ic, train_r2,
                 n_train_samples, n_test_samples,
                 best_alpha, best_l1_ratio, n_features_selected,
                 duration_seconds, error_message, completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
             """,
             (
                 result.run_id,
-                "elastic_net",
+                "gam",
                 result.status,
                 result.config.holding_period,
                 result.train_quarters[-1] if result.train_quarters else "",
@@ -816,38 +675,40 @@ def save_elastic_net_result(
                 config_json,
                 result.train_ic,
                 result.test_ic,
+                result.train_r2,
                 result.n_train_samples,
                 result.n_test_samples,
-                result.best_alpha,
-                result.best_l1_ratio,
-                result.n_features_selected,
+                result.best_lam,  # Store lam in best_alpha column
+                None,  # No l1_ratio for GAM
+                result.n_features,
                 result.duration_seconds,
                 result.error_message,
             ),
         )
 
-        # Save coefficients
-        report("Saving coefficients...")
-        coef_data = [
-            (
-                result.run_id,
-                coef.feature_name,
-                coef.coefficient,
-                coef.coefficient_std,
-                coef.stability_score,
-                coef.importance_rank,
+        # Save partial dependences
+        report("Saving partial dependences...")
+        for pd in result.partial_dependences:
+            conn.execute(
+                """
+                INSERT INTO ml_model_partial_dependence (
+                    run_id, feature_name, x_values, y_values,
+                    optimal_min, optimal_max, peak_x, peak_y,
+                    importance_rank
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result.run_id,
+                    pd.feature_name,
+                    json.dumps(pd.x_values),
+                    json.dumps(pd.y_values),
+                    pd.optimal_min,
+                    pd.optimal_max,
+                    pd.peak_x,
+                    pd.peak_y,
+                    pd.importance_rank,
+                ),
             )
-            for coef in result.coefficients
-        ]
-        conn.executemany(
-            """
-            INSERT INTO ml_model_coefficients (
-                run_id, feature_name, coefficient,
-                coefficient_std, stability_score, feature_importance_rank
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            coef_data,
-        )
 
         # Save IC history
         report("Saving IC history...")
@@ -873,16 +734,14 @@ def save_elastic_net_result(
     return result.run_id
 
 
-def load_elastic_net_result(run_id: str) -> dict[str, Any]:
-    """Load Elastic Net result from database."""
+def load_gam_result(run_id: str) -> dict[str, Any]:
+    """Load GAM result from database."""
     db = get_db_manager()
 
     with db.get_connection() as conn:
         # Load run
         run = conn.execute(
-            """
-            SELECT * FROM ml_model_runs WHERE id = ?
-            """,
+            "SELECT * FROM ml_model_runs WHERE id = ?",
             (run_id,),
         ).fetchone()
 
@@ -892,27 +751,30 @@ def load_elastic_net_result(run_id: str) -> dict[str, Any]:
         columns = [desc[0] for desc in conn.description]
         run_dict = dict(zip(columns, run))
 
-        # Load coefficients
-        coefs = conn.execute(
+        # Load partial dependences
+        pds = conn.execute(
             """
-            SELECT feature_name, coefficient, coefficient_std,
-                   stability_score, feature_importance_rank
-            FROM ml_model_coefficients
+            SELECT feature_name, x_values, y_values,
+                   optimal_min, optimal_max, peak_x, peak_y, importance_rank
+            FROM ml_model_partial_dependence
             WHERE run_id = ?
-            ORDER BY feature_importance_rank
+            ORDER BY importance_rank
             """,
             (run_id,),
         ).fetchall()
 
-        coefficients = [
+        partial_dependences = [
             {
                 "feature_name": row[0],
-                "coefficient": row[1],
-                "coefficient_std": row[2],
-                "stability_score": row[3],
-                "importance_rank": row[4],
+                "x_values": json.loads(row[1]),
+                "y_values": json.loads(row[2]),
+                "optimal_min": row[3],
+                "optimal_max": row[4],
+                "peak_x": row[5],
+                "peak_y": row[6],
+                "importance_rank": row[7],
             }
-            for row in coefs
+            for row in pds
         ]
 
         # Load IC history
@@ -938,7 +800,7 @@ def load_elastic_net_result(run_id: str) -> dict[str, Any]:
 
         return {
             "run": run_dict,
-            "coefficients": coefficients,
+            "partial_dependences": partial_dependences,
             "ic_history": ic_history_list,
             "predictions": [],  # Predictions are now calculated live
         }

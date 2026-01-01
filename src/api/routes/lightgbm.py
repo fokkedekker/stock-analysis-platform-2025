@@ -1,4 +1,4 @@
-"""Elastic Net API routes."""
+"""LightGBM API routes."""
 
 import asyncio
 import concurrent.futures
@@ -13,11 +13,20 @@ from pydantic import BaseModel
 
 from src.database.connection import get_db_manager
 from src.ml_models import (
-    ElasticNetConfig,
-    ElasticNetModel,
+    LightGBMConfig,
+    LightGBMModel,
     ELASTIC_NET_FEATURES,
-    save_elastic_net_result,
-    load_elastic_net_result,
+    save_lightgbm_result,
+    load_lightgbm_result,
+)
+
+# Import shared signal types from elastic_net
+from src.api.routes.elastic_net import (
+    MLModelSignal,
+    MLModelSignalsResponse,
+    _add_quarters,
+    _quarter_to_date,
+    _create_ml_signal,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,17 +36,16 @@ router = APIRouter()
 _running_analyses: dict[str, dict] = {}
 
 
-class ElasticNetRequest(BaseModel):
-    """Request to start Elastic Net training."""
+class LightGBMRequest(BaseModel):
+    """Request to start LightGBM training."""
 
     quarters: list[str]
     holding_period: int = 4
     train_end_quarter: str | None = None
     features: list[str] | None = None
-    l1_ratios: list[float] | None = None
-    cv_folds: int = 5
+    n_optuna_trials: int = 50
     winsorize_percentile: float = 0.01
-    target_type: str = "raw"  # "raw", "beta_adjusted", "sector_adjusted", "full_adjusted"
+    target_type: str = "raw"
 
 
 class RunResponse(BaseModel):
@@ -48,13 +56,12 @@ class RunResponse(BaseModel):
     estimated_duration_seconds: int
 
 
-class CoefficientResponse(BaseModel):
-    """Coefficient result."""
+class FeatureImportanceResponse(BaseModel):
+    """Feature importance result."""
 
     feature_name: str
-    coefficient: float
-    coefficient_std: float
-    stability_score: float
+    importance_gain: float
+    importance_split: float
     importance_rank: int
 
 
@@ -75,7 +82,7 @@ class PredictionResponse(BaseModel):
     predicted_rank: int
 
 
-class ElasticNetResultResponse(BaseModel):
+class LightGBMResultResponse(BaseModel):
     """Full result response."""
 
     run_id: str
@@ -88,14 +95,13 @@ class ElasticNetResultResponse(BaseModel):
     n_train_samples: int
     n_test_samples: int
     # Model params
-    best_alpha: float | None
-    best_l1_ratio: float | None
+    best_params: dict[str, Any]
     n_features_selected: int
     # Config
     holding_period: int
     train_end_quarter: str | None
     # Data
-    coefficients: list[CoefficientResponse]
+    feature_importances: list[FeatureImportanceResponse]
     ic_history: list[ICHistoryResponse]
     predictions: list[PredictionResponse]
 
@@ -114,11 +120,11 @@ class RunSummary(BaseModel):
 
 @router.post("/run", response_model=RunResponse)
 async def start_training(
-    request: ElasticNetRequest,
+    request: LightGBMRequest,
     background_tasks: BackgroundTasks,
 ) -> RunResponse:
     """
-    Start Elastic Net model training.
+    Start LightGBM model training.
 
     This runs in the background. Use /progress/{run_id} to track progress
     and /results/{run_id} to get results when complete.
@@ -141,16 +147,15 @@ async def start_training(
         "cancelled": False,
     }
 
-    # Build config - pass run_id so model uses the same ID as API
-    config = ElasticNetConfig(
+    # Build config
+    config = LightGBMConfig(
         quarters=request.quarters,
         holding_period=request.holding_period,
         train_end_quarter=request.train_end_quarter,
         features=request.features or ELASTIC_NET_FEATURES.copy(),
-        l1_ratios=request.l1_ratios or [0.1, 0.5, 0.7, 0.9, 0.95, 1.0],
-        cv_folds=request.cv_folds,
+        n_optuna_trials=request.n_optuna_trials,
         winsorize_percentile=request.winsorize_percentile,
-        run_id=run_id,  # Use same run_id as API
+        run_id=run_id,
         target_type=request.target_type,
     )
 
@@ -170,7 +175,7 @@ async def start_training(
     # Run training in background
     async def run_training():
         try:
-            model = ElasticNetModel(
+            model = LightGBMModel(
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
             )
@@ -180,28 +185,28 @@ async def start_training(
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 result = await loop.run_in_executor(pool, partial(model.train, config))
 
-                # Save result to database (also in thread pool so SSE updates work)
+                # Save result to database
                 await loop.run_in_executor(
                     pool,
-                    partial(save_elastic_net_result, result, progress_callback=progress_callback)
+                    partial(save_lightgbm_result, result, progress_callback=progress_callback)
                 )
 
             _running_analyses[run_id]["status"] = result.status
             _running_analyses[run_id]["progress"] = 100
             _running_analyses[run_id]["result_run_id"] = result.run_id
 
-            logger.info(f"Elastic Net {run_id} completed with status {result.status}")
+            logger.info(f"LightGBM {run_id} completed with status {result.status}")
 
         except Exception as e:
-            logger.exception(f"Elastic Net {run_id} failed: {e}")
+            logger.exception(f"LightGBM {run_id} failed: {e}")
             _running_analyses[run_id]["status"] = "failed"
             _running_analyses[run_id]["error"] = str(e)
 
     background_tasks.add_task(run_training)
 
-    # Estimate duration
+    # Estimate duration (LightGBM with Optuna is slower)
     num_quarters = len(request.quarters)
-    estimated_seconds = max(30, num_quarters * 5)
+    estimated_seconds = max(60, num_quarters * 8 + request.n_optuna_trials * 2)
 
     return RunResponse(
         run_id=run_id,
@@ -224,9 +229,9 @@ async def get_progress(run_id: str):
 
         while True:
             if run_id not in _running_analyses:
-                # Check if run exists in database (completed before we started watching)
+                # Check if run exists in database
                 try:
-                    result = load_elastic_net_result(run_id)
+                    result = load_lightgbm_result(run_id)
                     if result:
                         yield f"data: {json.dumps({'status': result['run']['status'], 'progress': 100, 'stage': 'complete'})}\n\n"
                     else:
@@ -239,13 +244,11 @@ async def get_progress(run_id: str):
             current_progress = info.get("progress", 0)
             current_stage = info.get("stage", "")
 
-            # Send update if progress OR stage changed
             if current_progress != last_progress or current_stage != last_stage:
                 last_progress = current_progress
                 last_stage = current_stage
                 yield f"data: {json.dumps(info)}\n\n"
 
-            # Check if complete
             if info.get("status") in ("completed", "failed", "cancelled"):
                 break
 
@@ -261,20 +264,20 @@ async def get_progress(run_id: str):
     )
 
 
-@router.get("/results/{run_id}", response_model=ElasticNetResultResponse)
-async def get_results(run_id: str) -> ElasticNetResultResponse:
+@router.get("/results/{run_id}", response_model=LightGBMResultResponse)
+async def get_results(run_id: str) -> LightGBMResultResponse:
     """
-    Get complete results for an Elastic Net run.
+    Get complete results for a LightGBM run.
     """
     try:
-        data = load_elastic_net_result(run_id)
+        data = load_lightgbm_result(run_id)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     run = data["run"]
     config_json = json.loads(run.get("config_json", "{}"))
 
-    return ElasticNetResultResponse(
+    return LightGBMResultResponse(
         run_id=run["id"],
         status=run["status"],
         error_message=run.get("error_message"),
@@ -283,20 +286,18 @@ async def get_results(run_id: str) -> ElasticNetResultResponse:
         test_ic=run.get("test_ic"),
         n_train_samples=run.get("n_train_samples", 0),
         n_test_samples=run.get("n_test_samples", 0),
-        best_alpha=run.get("best_alpha"),
-        best_l1_ratio=run.get("best_l1_ratio"),
+        best_params=config_json.get("best_params", {}),
         n_features_selected=run.get("n_features_selected", 0),
         holding_period=run.get("holding_period", 4),
         train_end_quarter=run.get("train_end_quarter"),
-        coefficients=[
-            CoefficientResponse(
-                feature_name=c["feature_name"],
-                coefficient=c["coefficient"],
-                coefficient_std=c.get("coefficient_std", 0),
-                stability_score=c.get("stability_score", 0),
-                importance_rank=c.get("importance_rank", 0),
+        feature_importances=[
+            FeatureImportanceResponse(
+                feature_name=fi["feature_name"],
+                importance_gain=fi.get("importance_gain", 0),
+                importance_split=fi.get("importance_split", 0),
+                importance_rank=fi.get("importance_rank", 0),
             )
-            for c in data["coefficients"]
+            for fi in data["feature_importances"]
         ],
         ic_history=[
             ICHistoryResponse(
@@ -318,25 +319,24 @@ async def get_results(run_id: str) -> ElasticNetResultResponse:
     )
 
 
-@router.get("/coefficients/{run_id}")
-async def get_coefficients(run_id: str, limit: int = 50) -> list[CoefficientResponse]:
+@router.get("/feature-importance/{run_id}")
+async def get_feature_importance(run_id: str, limit: int = 50) -> list[FeatureImportanceResponse]:
     """
-    Get coefficient table for a run.
+    Get feature importance table for a run.
     """
     try:
-        data = load_elastic_net_result(run_id)
+        data = load_lightgbm_result(run_id)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     return [
-        CoefficientResponse(
-            feature_name=c["feature_name"],
-            coefficient=c["coefficient"],
-            coefficient_std=c.get("coefficient_std", 0),
-            stability_score=c.get("stability_score", 0),
-            importance_rank=c.get("importance_rank", 0),
+        FeatureImportanceResponse(
+            feature_name=fi["feature_name"],
+            importance_gain=fi.get("importance_gain", 0),
+            importance_split=fi.get("importance_split", 0),
+            importance_rank=fi.get("importance_rank", 0),
         )
-        for c in data["coefficients"][:limit]
+        for fi in data["feature_importances"][:limit]
     ]
 
 
@@ -346,7 +346,7 @@ async def get_ic_history(run_id: str) -> list[ICHistoryResponse]:
     Get IC over time for a run.
     """
     try:
-        data = load_elastic_net_result(run_id)
+        data = load_lightgbm_result(run_id)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
@@ -367,7 +367,7 @@ async def get_predictions(run_id: str, limit: int = 100) -> list[PredictionRespo
     Get stock predictions for a run.
     """
     try:
-        data = load_elastic_net_result(run_id)
+        data = load_lightgbm_result(run_id)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
@@ -384,7 +384,7 @@ async def get_predictions(run_id: str, limit: int = 100) -> list[PredictionRespo
 @router.get("/history")
 async def list_runs(limit: int = 50) -> list[RunSummary]:
     """
-    List past Elastic Net runs.
+    List past LightGBM runs.
     """
     db = get_db_manager()
 
@@ -394,7 +394,7 @@ async def list_runs(limit: int = 50) -> list[RunSummary]:
             SELECT id, status, created_at, holding_period,
                    train_ic, test_ic, n_features_selected
             FROM ml_model_runs
-            WHERE model_type = 'elastic_net'
+            WHERE model_type = 'lightgbm'
             ORDER BY created_at DESC
             LIMIT ?
             """,
@@ -434,7 +434,7 @@ async def cancel_run(run_id: str) -> dict:
 @router.get("/features")
 async def list_features() -> dict:
     """
-    List available features for Elastic Net.
+    List available features for LightGBM.
     """
     return {
         "features": ELASTIC_NET_FEATURES,
@@ -447,279 +447,6 @@ async def list_features() -> dict:
 # ============================================================================
 
 
-class MLModelSignal(BaseModel):
-    """A single buy/sell signal from ML model."""
-
-    buy_quarter: str
-    buy_date: str
-    sell_quarter: str
-    sell_date: str
-    buy_price: float | None
-    sell_price: float | None
-    stock_return: float | None
-    spy_return: float | None
-    alpha: float | None
-    matched: bool  # True if sell quarter has passed (trade completed)
-    predicted_alpha: float
-    predicted_rank: int
-
-
-class MLModelSignalsResponse(BaseModel):
-    """Response with all ML model signals for a stock."""
-
-    symbol: str
-    run_id: str
-    model_name: str
-    holding_period: int
-    signals: list[MLModelSignal]
-    total_return: float | None
-    total_alpha: float | None
-    avg_alpha_per_trade: float | None
-    num_trades: int
-    win_rate: float | None
-
-
-def _add_quarters(quarter: str, n: int) -> str:
-    """Add n quarters to a quarter string. e.g., '2023Q1' + 2 = '2023Q3'."""
-    year = int(quarter[:4])
-    q = int(quarter[5])
-    total_q = (year * 4 + q - 1) + n
-    new_year = total_q // 4
-    new_q = (total_q % 4) + 1
-    return f"{new_year}Q{new_q}"
-
-
-def _quarter_to_date(quarter: str) -> str:
-    """Convert quarter string to beginning-of-quarter date."""
-    year = int(quarter[:4])
-    q = int(quarter[5])
-    if q == 1:
-        return f"{year}-01-01"
-    elif q == 2:
-        return f"{year}-04-01"
-    elif q == 3:
-        return f"{year}-07-01"
-    else:
-        return f"{year}-10-01"
-
-
-def _calculate_ml_score_for_quarter(
-    conn,
-    symbol: str,
-    quarter: str,
-    coefficients: dict[str, float],
-    features_needed: list[str],
-) -> tuple[float | None, int | None, int]:
-    """
-    Calculate ML score for a single stock in a quarter and return (score, rank, total).
-
-    Returns (None, None, 0) if the stock doesn't have enough data.
-    """
-    import json
-
-    # Quality tag mapping
-    QUALITY_TAG_MAP = {
-        "Durable Compounder": "has_durable_compounder",
-        "Cash Machine": "has_cash_machine",
-        "Deep Value": "has_deep_value",
-        "Heavy Reinvestor": "has_heavy_reinvestor",
-        "Premium Priced": "has_premium_priced",
-        "Volatile Returns": "has_volatile_returns",
-        "Weak Moat Signal": "has_weak_moat_signal",
-        "Earnings Quality Concern": "has_earnings_quality_concern",
-    }
-
-    # Get all stocks' data for this quarter to calculate z-scores
-    result = conn.execute(
-        """
-        SELECT
-            t.symbol,
-            p.f_score as piotroski_score,
-            g.criteria_passed as graham_score,
-            a.z_score as altman_z_score,
-            r.roic,
-            gp.peg_ratio,
-            mf.combined_rank as magic_formula_rank,
-            ff.book_to_market_percentile,
-            km.pe_ratio, km.pb_ratio, km.price_to_sales,
-            km.price_to_free_cash_flow, km.price_to_operating_cash_flow,
-            km.ev_to_ebitda, km.ev_to_sales, km.ev_to_free_cash_flow, km.ev_to_operating_cash_flow,
-            km.roe, km.roa, km.return_on_tangible_assets,
-            km.gross_profit_margin, km.operating_profit_margin, km.net_profit_margin,
-            km.current_ratio, km.quick_ratio, km.cash_ratio,
-            km.debt_ratio, km.debt_to_equity, km.debt_to_assets, km.net_debt_to_ebitda, km.interest_coverage,
-            km.asset_turnover, km.inventory_turnover, km.receivables_turnover, km.payables_turnover,
-            km.dividend_yield, km.payout_ratio,
-            r.roic_std_dev, r.gross_margin_std_dev, r.fcf_to_net_income, r.reinvestment_rate, r.fcf_yield,
-            gp.eps_growth_1yr, gp.eps_growth_3yr, gp.eps_growth_5yr, gp.eps_cagr,
-            ff.profitability_percentile, ff.asset_growth_percentile,
-            mf.earnings_yield,
-            r.quality_tags, nn.trading_below_ncav, r.fcf_positive_5yr
-        FROM tickers t
-        LEFT JOIN key_metrics km ON t.symbol = km.symbol
-        LEFT JOIN roic_quality_results r ON t.symbol = r.symbol AND r.analysis_quarter = ?
-        LEFT JOIN piotroski_results p ON t.symbol = p.symbol AND p.analysis_quarter = ?
-        LEFT JOIN graham_results g ON t.symbol = g.symbol AND g.analysis_quarter = ? AND g.mode = 'modern'
-        LEFT JOIN magic_formula_results mf ON t.symbol = mf.symbol AND mf.analysis_quarter = ?
-        LEFT JOIN garp_peg_results gp ON t.symbol = gp.symbol AND gp.analysis_quarter = ?
-        LEFT JOIN altman_results a ON t.symbol = a.symbol AND a.analysis_quarter = ?
-        LEFT JOIN fama_french_results ff ON t.symbol = ff.symbol AND ff.analysis_quarter = ?
-        LEFT JOIN net_net_results nn ON t.symbol = nn.symbol AND nn.analysis_quarter = ?
-        WHERE t.is_active = TRUE
-        """,
-        (quarter, quarter, quarter, quarter, quarter, quarter, quarter, quarter),
-    ).fetchall()
-
-    if not result:
-        return None, None, 0
-
-    columns = [desc[0] for desc in conn.description]
-    stocks = [dict(zip(columns, row)) for row in result]
-
-    # Parse boolean tags
-    for stock in stocks:
-        quality_tags_json = stock.get("quality_tags")
-        stock_tags = set()
-        if quality_tags_json:
-            try:
-                stock_tags = set(json.loads(quality_tags_json))
-            except (json.JSONDecodeError, TypeError):
-                pass
-        for tag_name, feature_name in QUALITY_TAG_MAP.items():
-            stock[feature_name] = 1.0 if tag_name in stock_tags else 0.0
-        stock["trading_below_ncav"] = 1.0 if stock.get("trading_below_ncav") else 0.0
-        stock["fcf_positive_5yr"] = 1.0 if stock.get("fcf_positive_5yr") else 0.0
-
-    # Calculate z-scores
-    feature_values: dict[str, list[float]] = {f: [] for f in features_needed}
-    stock_feature_vals: list[dict[str, float | None]] = []
-
-    for stock in stocks:
-        stock_vals = {}
-        for feature in features_needed:
-            val = stock.get(feature)
-            if val is not None:
-                try:
-                    val = float(val)
-                    feature_values[feature].append(val)
-                    stock_vals[feature] = val
-                except (TypeError, ValueError):
-                    stock_vals[feature] = None
-            else:
-                stock_vals[feature] = None
-        stock_feature_vals.append(stock_vals)
-
-    # Calculate mean and std
-    feature_stats: dict[str, tuple[float, float]] = {}
-    for feature in features_needed:
-        vals = feature_values[feature]
-        if len(vals) > 0:
-            mean = sum(vals) / len(vals)
-            variance = sum((v - mean) ** 2 for v in vals) / len(vals) if len(vals) > 1 else 1.0
-            std = variance ** 0.5 if variance > 0 else 1.0
-            feature_stats[feature] = (mean, std)
-        else:
-            feature_stats[feature] = (0.0, 1.0)
-
-    # Score all stocks
-    scored_stocks = []
-    for i, stock in enumerate(stocks):
-        stock_vals = stock_feature_vals[i]
-        score = 0.0
-        features_used = 0
-
-        for feature in features_needed:
-            val = stock_vals.get(feature)
-            if val is not None:
-                mean, std = feature_stats[feature]
-                z_score = (val - mean) / std if std > 0 else 0.0
-                coef = coefficients.get(feature, 0.0)
-                score += z_score * coef
-                features_used += 1
-
-        if features_used >= len(features_needed) * 0.5:
-            scored_stocks.append({
-                "symbol": stock["symbol"],
-                "score": score,
-            })
-
-    # Sort and rank
-    scored_stocks.sort(key=lambda x: x["score"], reverse=True)
-
-    # Find target symbol
-    target_score = None
-    target_rank = None
-    for i, s in enumerate(scored_stocks):
-        if s["symbol"].upper() == symbol.upper():
-            target_score = s["score"]
-            target_rank = i + 1
-            break
-
-    return target_score, target_rank, len(scored_stocks)
-
-
-def _create_ml_signal(
-    buy_quarter: str,
-    sell_quarter: str,
-    stock_prices: dict[str, float],
-    spy_prices: dict[str, float],
-    current_stock_price: float | None,
-    current_spy_price: float | None,
-    predicted_alpha: float,
-    predicted_rank: int,
-) -> MLModelSignal:
-    """Create an ML model signal with calculated returns."""
-    buy_date = _quarter_to_date(buy_quarter)
-    sell_date = _quarter_to_date(sell_quarter)
-
-    buy_price = stock_prices.get(buy_quarter)
-    sell_price = stock_prices.get(sell_quarter)
-
-    # Use current price if sell quarter is in the future
-    if sell_price is None and current_stock_price is not None:
-        # Check if sell quarter is after latest available quarter
-        latest_quarter = max(stock_prices.keys()) if stock_prices else None
-        if latest_quarter and sell_quarter > latest_quarter:
-            sell_price = current_stock_price
-
-    spy_buy = spy_prices.get(buy_quarter)
-    spy_sell = spy_prices.get(sell_quarter)
-
-    if spy_sell is None and current_spy_price is not None:
-        latest_spy_quarter = max(spy_prices.keys()) if spy_prices else None
-        if latest_spy_quarter and sell_quarter > latest_spy_quarter:
-            spy_sell = current_spy_price
-
-    stock_return = None
-    spy_return = None
-    alpha = None
-    matched = False
-
-    if buy_price and sell_price and buy_price > 0:
-        stock_return = round(((sell_price - buy_price) / buy_price) * 100, 2)
-        matched = True
-
-    if spy_buy and spy_sell and spy_buy > 0:
-        spy_return = round(((spy_sell - spy_buy) / spy_buy) * 100, 2)
-        if stock_return is not None:
-            alpha = round(stock_return - spy_return, 2)
-
-    return MLModelSignal(
-        buy_quarter=buy_quarter,
-        buy_date=buy_date,
-        sell_quarter=sell_quarter,
-        sell_date=sell_date,
-        buy_price=buy_price,
-        sell_price=sell_price,
-        stock_return=stock_return,
-        spy_return=spy_return,
-        alpha=alpha,
-        matched=matched,
-        predicted_alpha=predicted_alpha,
-        predicted_rank=predicted_rank,
-    )
-
-
 @router.get("/signals/{run_id}/{symbol}", response_model=MLModelSignalsResponse)
 async def get_model_signals(
     run_id: str,
@@ -727,10 +454,10 @@ async def get_model_signals(
     top_percentile: int = 20,
 ) -> MLModelSignalsResponse:
     """
-    Get buy/sell signals for a stock based on ML model predictions.
+    Get buy/sell signals for a stock based on LightGBM model predictions.
 
     Uses LIVE calculation of model scores (same as Pipeline apply-model endpoint).
-    Implements a "rolling hold" model (same as strategy signals):
+    Implements a "rolling hold" model:
     - Buy when stock first enters top N% by model score
     - If stock keeps qualifying in subsequent quarters, extend the sell date
     - Sell when stock stops qualifying AND holding period expires
@@ -739,7 +466,7 @@ async def get_model_signals(
 
     # Load model data
     try:
-        model_data = load_elastic_net_result(run_id)
+        model_data = load_lightgbm_result(run_id)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
@@ -749,13 +476,12 @@ async def get_model_signals(
 
     # Format model name
     date_str = str(created_at)[:10] if created_at else ""
-    model_name = f"Elastic Net - {date_str}"
+    model_name = f"LightGBM - {date_str}"
 
     db = get_db_manager()
 
     with db.get_connection() as conn:
-        # Get quarters where this specific symbol has analysis data
-        # Only go back to 2020 since that's what the chart shows
+        # Get quarters where this symbol has analysis data (2020+)
         symbol_quarters_result = conn.execute(
             """
             SELECT DISTINCT analysis_quarter
@@ -782,16 +508,14 @@ async def get_model_signals(
                 win_rate=None,
             )
 
-        # Use the EXACT SAME apply-model logic as the Pipeline page
-        # This guarantees rankings match between Pipeline and signals
+        # Use the SAME apply-model logic as Pipeline page
         symbol_data: dict[str, dict] = {}
         quarter_totals: dict[str, int] = {}
 
         for quarter in symbol_quarters:
-            # Call the same apply-model endpoint logic
             result = await apply_model_to_current(
                 run_id=run_id,
-                top_percentile=100,  # Get all stocks to calculate rank
+                top_percentile=100,
                 min_score=None,
                 quarter=quarter,
                 limit=1000,
@@ -801,7 +525,6 @@ async def get_model_signals(
             total_scored = result.get("total_scored", len(stocks))
             quarter_totals[quarter] = total_scored
 
-            # Find this symbol's rank
             symbol_upper = symbol.upper()
             for stock in stocks:
                 if stock.get("symbol", "").upper() == symbol_upper:
@@ -830,7 +553,7 @@ async def get_model_signals(
             latest_quarter = max(stock_prices.keys())
             current_stock_price = stock_prices[latest_quarter]
 
-        # Load SPY prices from spy_prices table
+        # Load SPY prices
         spy_result = conn.execute(
             """
             SELECT quarter, price
@@ -851,7 +574,7 @@ async def get_model_signals(
         in_position = False
         buy_quarter: str | None = None
         last_match_quarter: str | None = None
-        dropped_out = False  # Track if stock dropped out of top N% since buy
+        dropped_out = False
         last_pred_alpha: float = 0.0
         last_pred_rank: int = 0
 
@@ -860,7 +583,6 @@ async def get_model_signals(
             pred = symbol_data.get(quarter)
 
             if not pred or total_stocks == 0:
-                # No prediction for this symbol in this quarter
                 if in_position and last_match_quarter:
                     dropped_out = True
                     planned_sell = _add_quarters(last_match_quarter, holding_period)
@@ -876,14 +598,12 @@ async def get_model_signals(
                         dropped_out = False
                 continue
 
-            # Check if stock is in top N%
             rank = pred["rank"]
             percentile = (rank / total_stocks) * 100
             matched = percentile <= top_percentile
 
             if matched:
                 if not in_position:
-                    # Start new position
                     in_position = True
                     buy_quarter = quarter
                     last_match_quarter = quarter
@@ -891,36 +611,29 @@ async def get_model_signals(
                     last_pred_alpha = pred["score"]
                     last_pred_rank = rank
                 else:
-                    # Already in position - check if we should close old and start new
                     if dropped_out and last_match_quarter:
                         planned_sell = _add_quarters(last_match_quarter, holding_period)
                         if quarter >= planned_sell:
-                            # Stock dropped out, we're past planned sell, now matches again
-                            # Close old position and start new one
                             signals.append(_create_ml_signal(
                                 buy_quarter, planned_sell, stock_prices, spy_prices,
                                 current_stock_price, current_spy_price,
                                 last_pred_alpha, last_pred_rank,
                             ))
-                            # Start new position
                             buy_quarter = quarter
                             last_match_quarter = quarter
                             dropped_out = False
                             last_pred_alpha = pred["score"]
                             last_pred_rank = rank
                         else:
-                            # Stock came back before planned sell - extend position
                             last_match_quarter = quarter
                             dropped_out = False
                             last_pred_alpha = pred["score"]
                             last_pred_rank = rank
                     else:
-                        # Continuous match - just extend position
                         last_match_quarter = quarter
                         last_pred_alpha = pred["score"]
                         last_pred_rank = rank
             else:
-                # Not matched
                 if in_position and last_match_quarter:
                     dropped_out = True
                     planned_sell = _add_quarters(last_match_quarter, holding_period)
@@ -935,7 +648,7 @@ async def get_model_signals(
                         last_match_quarter = None
                         dropped_out = False
 
-        # Handle position still open at end
+        # Handle position still open
         if in_position and buy_quarter and last_match_quarter:
             planned_sell = _add_quarters(last_match_quarter, holding_period)
             signals.append(_create_ml_signal(
@@ -954,23 +667,19 @@ async def get_model_signals(
     win_rate = None
 
     if num_trades > 0:
-        # Calculate compound stock return
         stock_compound = 1.0
         for s in valid_trades:
             stock_compound *= (1 + s.stock_return / 100)
         total_return = round((stock_compound - 1) * 100, 2)
 
-        # Calculate compound SPY return for consistent alpha calculation
         spy_compound = 1.0
         for s in valid_trades:
             if s.spy_return is not None:
                 spy_compound *= (1 + s.spy_return / 100)
         total_spy_return = (spy_compound - 1) * 100
 
-        # Total alpha = compound stock return - compound SPY return
         total_alpha = round(total_return - total_spy_return, 2)
 
-        # Avg alpha per trade and win rate use individual trade alphas
         alphas = [s.alpha for s in valid_trades if s.alpha is not None]
         if alphas:
             avg_alpha = round(sum(alphas) / len(alphas), 2)

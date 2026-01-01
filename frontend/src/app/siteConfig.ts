@@ -10,6 +10,7 @@ export const siteConfig = {
     factorScreening: "/models/factor-screening",
     elasticNet: "/models/elastic-net",
     gam: "/models/gam",
+    lightgbm: "/models/lightgbm",
     // Screeners
     graham: "/screeners/graham",
     magicFormula: "/screeners/magic-formula",

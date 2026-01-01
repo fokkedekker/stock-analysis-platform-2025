@@ -5,6 +5,7 @@ This script fetches:
 1. Financial statements (income, balance, cashflow, metrics) with sufficient history
 2. Historical prices for quarter-end dates
 3. Calculates PE/PB ratios from the data
+4. SPY benchmark prices for alpha calculations
 """
 
 import asyncio
@@ -28,6 +29,78 @@ from src.database.schema import create_all_tables
 from src.scrapers.fmp_client import FMPClient
 from src.scrapers.data_fetcher import CheckpointManager, DataFetcher
 from src.scrapers.macro_fetcher import MacroFetcher
+
+
+def sync_spy_prices(console: Console, start_year: int = 2010) -> int:
+    """Sync SPY quarterly prices using yfinance.
+
+    Returns number of quarters added.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        console.print("[yellow]yfinance not installed, skipping SPY sync[/yellow]")
+        return 0
+
+    db = get_db_manager()
+    now = datetime.now(timezone.utc)
+    end_year = now.year
+
+    # Generate all quarters we might need
+    all_quarters = []
+    for year in range(start_year, end_year + 1):
+        for q in range(1, 5):
+            quarter_str = f"{year}Q{q}"
+            all_quarters.append(quarter_str)
+
+    # Check which quarters we already have
+    with db.get_connection() as conn:
+        existing = conn.execute("SELECT quarter FROM spy_prices").fetchall()
+        existing_quarters = {row[0] for row in existing}
+
+    missing_quarters = [q for q in all_quarters if q not in existing_quarters]
+
+    if not missing_quarters:
+        return 0
+
+    # Fetch SPY data from yfinance
+    spy = yf.Ticker('SPY')
+    hist = spy.history(start=f'{start_year}-01-01', end=f'{end_year + 1}-01-01')
+
+    if hist.empty:
+        console.print("[yellow]Could not fetch SPY data from yfinance[/yellow]")
+        return 0
+
+    # Map quarters to end dates
+    quarter_end_map = {
+        1: ('03', '31'), 2: ('06', '30'), 3: ('09', '30'), 4: ('12', '31')
+    }
+
+    # Get prices for missing quarters
+    new_prices = {}
+    for quarter in missing_quarters:
+        year = int(quarter[:4])
+        q = int(quarter[5])
+        month, day = quarter_end_map[q]
+        date_str = f"{year}-{month}-{day}"
+
+        # Find closest date on or before quarter end
+        mask = hist.index <= date_str
+        if mask.any():
+            closest = hist.index[mask][-1]
+            price = float(hist.loc[closest, 'Close'])
+            new_prices[quarter] = round(price, 2)
+
+    # Insert new prices
+    if new_prices:
+        with db.get_connection() as conn:
+            for quarter, price in new_prices.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO spy_prices (quarter, price, fetched_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                    (quarter, price)
+                )
+
+    return len(new_prices)
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -209,10 +282,14 @@ class HistoricalDataFetcher:
             """, (symbol, quarter, price, market_cap, pe_ratio, pb_ratio, shares,
                   datetime.now(timezone.utc), json.dumps({"source": "historical_load"})))
         else:
+            # Update price/PE/PB even if row exists, but don't overwrite other fields
             conn.execute("""
                 INSERT INTO company_profiles (symbol, fiscal_quarter, price, market_cap, pe_ratio, pb_ratio, shares_outstanding, fetched_at, raw_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (symbol, fiscal_quarter) DO NOTHING
+                ON CONFLICT (symbol, fiscal_quarter) DO UPDATE SET
+                    price = COALESCE(EXCLUDED.price, company_profiles.price),
+                    pe_ratio = COALESCE(EXCLUDED.pe_ratio, company_profiles.pe_ratio),
+                    pb_ratio = COALESCE(EXCLUDED.pb_ratio, company_profiles.pb_ratio)
             """, (symbol, quarter, price, market_cap, pe_ratio, pb_ratio, shares,
                   datetime.now(timezone.utc), json.dumps({"source": "historical_load"})))
 
@@ -241,12 +318,17 @@ class HistoricalDataFetcher:
                     metrics = await self.client.get_key_metrics(symbol, "quarter", self.financial_limit)
                     ratios = await self.client.get_ratios(symbol, "quarter", self.financial_limit)
 
+                    # Fetch profile for sector/industry data
+                    profile = await self.client.get_profile(symbol)
+
                     # Save to database using DataFetcher's save methods
                     self.data_fetcher.save_income_statements(symbol, income, "quarter", db_conn)
                     self.data_fetcher.save_balance_sheets(symbol, balance, "quarter", db_conn)
                     self.data_fetcher.save_cash_flow_statements(symbol, cashflow, "quarter", db_conn)
                     self.data_fetcher.save_key_metrics(symbol, metrics, "quarter", db_conn)
                     self.data_fetcher.save_ratios(symbol, ratios, "quarter", db_conn)
+                    # save_profile also updates tickers.sector/industry
+                    self.data_fetcher.save_profile(symbol, profile, db_conn)
 
                     await self.checkpoint.mark_endpoint_completed(symbol, "financials")
                     async with stats_lock:
@@ -264,29 +346,6 @@ class HistoricalDataFetcher:
                         progress.update(task_id, advance=1)
         finally:
             db_conn.close()
-
-    def _calculate_split_adjustment(self, splits: list[dict], price_date: str) -> float:
-        """Calculate split adjustment factor for a given date.
-
-        For each split that occurred AFTER price_date, we multiply by (numerator/denominator).
-        This adjusts historical prices to be comparable with current prices.
-
-        Args:
-            splits: List of split records with date, numerator, denominator
-            price_date: The date of the price in YYYY-MM-DD format
-
-        Returns:
-            Adjustment factor to multiply the raw price by
-        """
-        adjustment = 1.0
-        for split in splits:
-            split_date = split.get("date", "")
-            if split_date > price_date:
-                numerator = split.get("numerator", 1)
-                denominator = split.get("denominator", 1)
-                if denominator != 0:
-                    adjustment *= numerator / denominator
-        return adjustment
 
     async def _fetch_prices_worker(self, queue: asyncio.Queue, stats: dict, stats_lock: asyncio.Lock,
                                     progress: Progress | None, task_id: int | None, worker_id: int) -> None:
@@ -306,9 +365,7 @@ class HistoricalDataFetcher:
                             stats["skipped"] += 1
                         continue
 
-                    # Fetch splits first to calculate adjustment factors
-                    splits = await self.client.get_stock_splits(symbol)
-
+                    # FMP returns split-adjusted prices, no manual adjustment needed
                     prices = await self.client.get_historical_prices(symbol, self.from_date, self.to_date)
 
                     if not prices:
@@ -322,20 +379,15 @@ class HistoricalDataFetcher:
                         if not price_rec:
                             continue
 
-                        # Use close price
-                        raw_price = price_rec.get("close")
-                        if not raw_price:
+                        # Use close price (FMP returns split-adjusted prices)
+                        price = price_rec.get("close")
+                        if not price:
                             continue
-                        raw_price = float(raw_price)
+                        price = float(price)
 
-                        # Apply split adjustment to get price in today's terms
-                        price_date = price_rec.get("date", quarter_end.isoformat())
-                        adjustment = self._calculate_split_adjustment(splits, price_date)
-                        price = raw_price * adjustment
-
-                        # Sanity check: reject prices that are still extreme after adjustment
+                        # Sanity check: reject extreme prices
                         # (legitimate high-priced stocks like BRK.A are ~$700k but most are <$5000)
-                        if price > 100000 or price < 0.0001:
+                        if price > 1000000 or price < 0.0001:
                             continue
 
                         fin = self._get_financial_data(symbol, quarter_end, db_conn)
@@ -397,8 +449,8 @@ class HistoricalDataFetcher:
             console.print("[green]All financial statements already fetched![/green]")
         else:
             console.print(f"[cyan]Fetching {total:,} symbols ({skipped:,} skipped)[/cyan]")
-            # 4 API calls per symbol (income, balance, cashflow, metrics)
-            console.print(f"[dim]Est. time: {(total * 4) / settings.RATE_LIMIT_PER_MINUTE:.1f} min[/dim]")
+            # 6 API calls per symbol (income, balance, cashflow, metrics, ratios, profile)
+            console.print(f"[dim]Est. time: {(total * 6) / settings.RATE_LIMIT_PER_MINUTE:.1f} min[/dim]")
 
             with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                           BarColumn(), TaskProgressColumn(), TimeElapsedColumn()) as progress:
@@ -495,6 +547,16 @@ async def main(quarters: list[tuple[str, date]], force_update: bool = False,
 
     # Ensure all tables exist (including new macro tables)
     create_all_tables()
+
+    # Sync SPY benchmark prices for alpha calculations
+    console.print("[yellow]Syncing SPY benchmark prices...[/yellow]")
+    earliest_year = min(int(q[0][:4]) for q in quarters)
+    spy_added = sync_spy_prices(console, start_year=earliest_year)
+    if spy_added > 0:
+        console.print(f"[green]Added {spy_added} SPY quarterly prices[/green]")
+    else:
+        console.print("[green]SPY prices up to date[/green]")
+    console.print()
 
     # Calculate required financial data limit
     financial_limit = calculate_required_limit(quarters)
